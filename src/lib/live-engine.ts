@@ -127,9 +127,8 @@ export class LiveEngine extends PaperEngine {
       if (existing) {
         const flat =
           Object.keys(existing.holdings).length === 0 && existing.usdt >= existing.startingUsdt - 0.05;
-        // Always keep live params in sync with roster (e.g. drop liquid-only universe).
+        // Always keep live params in sync with the roster.
         existing.params = { ...strategy.defaults, ...spec.params };
-        delete existing.params.liquid;
         existing.allocPct = spec.allocPct;
         existing.baseAlloc = spec.allocPct;
         existing.interval = spec.interval;

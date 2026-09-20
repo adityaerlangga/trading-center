@@ -26,17 +26,17 @@ export type LiveAgentSpec = {
 };
 
 /**
- * Single live agent — current paper #1 on 5m:
- * spd_5m_tsmom_lb6_m10_d8 → tsmom_atr lookback 6, minMom 0.01
- * (startDelay 0 on live so it can trade immediately)
+ * Paper leader on 5m: tsmom_atr lookback 6, minMom 0.01.
+ * Scans when each 5m candle closes.
+ * liquid + 30% cap + one position so a single alt cannot take the sleeve.
  */
 export const LIVE_AGENT_SPECS: LiveAgentSpec[] = [
   {
     id: "live_tsmom_5m_lb6_m10",
     strategy: "tsmom_atr",
     interval: "5m",
-    params: { lookback: 6, minMom: 0.01, startDelay: 0 },
-    allocPct: 1,
+    params: { lookback: 6, minMom: 0.01, liquid: 1, maxPositions: 1, startDelay: 1 },
+    allocPct: 0.3,
   },
 ];
 

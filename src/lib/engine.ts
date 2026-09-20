@@ -581,6 +581,11 @@ export class PaperEngine {
     return 0;
   }
 
+  private markPrice(symbol: string) {
+    const quote = this.quotes[symbol];
+    return quote?.bid || quote?.ask || this.lastClose(symbol);
+  }
+
   private scanAll() {
     for (const agent of this.agents) {
       if (agent.status === "killed") continue;
@@ -649,9 +654,12 @@ export class PaperEngine {
         }
       }
 
+      const maxPositions = Number(params.maxPositions ?? 0);
       this.note(agent.id, {
         action: "scan",
-        reason: `Scan ${scanned} pair. Watchlist beli ${buys.length}, sinyal jual ${sells.length}. Posisi unlimited; entry hanya yang lolos filter.`,
+        reason: `Scan ${scanned} pair. Watchlist beli ${buys.length}, sinyal jual ${sells.length}. ${
+          maxPositions > 0 ? `Maks ${maxPositions} posisi` : "Posisi tidak dibatasi"
+        }; entry hanya yang lolos filter.`,
       });
 
       for (const sell of sells) {
@@ -682,11 +690,21 @@ export class PaperEngine {
       if (waitingStart) {
         this.note(agent.id, {
           action: "wait",
-          reason: `Belum mulai beli. Scan ${seen}/${startDelay}, cash $100 tetap dipegang sampai giliran start.`,
+          reason: `Belum mulai beli. Scan ${seen}/${startDelay}, cash tetap dipegang sampai giliran start.`,
         });
       }
+      const minTicket = this.config.mode === "live" ? 5 : 1;
       for (const buy of qualified) {
         if (waitingStart) break;
+        if (maxPositions > 0 && materialPositions(agent, (symbol) => this.markPrice(symbol)) >= maxPositions) {
+          this.note(agent.id, {
+            action: "wait",
+            symbol: buy.symbol,
+            score: buy.score,
+            reason: `${buy.symbol}: sudah ${maxPositions} posisi. Cash menunggu exit, tidak nambah.`,
+          });
+          break;
+        }
         const equity = this.markEquity(agent);
         const series = (this.series(interval)[buy.symbol] ?? []).filter((candle) => candle.isClosed);
         const close = series.at(-1)?.close ?? 0;
@@ -694,18 +712,18 @@ export class PaperEngine {
         const weight = volTargetWeight(agent.allocPct, close && atrVal ? atrVal / close : 0);
         const target = equity * weight;
 
-        if (isPegged(buy.symbol) || agent.usdt < 1 || target < 1) {
+        if (isPegged(buy.symbol) || agent.usdt < minTicket || target < minTicket) {
           this.note(agent.id, {
             action: "wait",
             symbol: buy.symbol,
             score: buy.score,
             reason: isPegged(buy.symbol)
               ? `${buy.symbol}: stablecoin dilewati.`
-              : agent.usdt < 1
-                ? `${buy.symbol}: cash ${agent.usdt.toFixed(2)} habis — tunggu exit.`
-                : `${buy.symbol}: size ${target.toFixed(2)} USDT di bawah minimum paper.`,
+              : agent.usdt < minTicket
+                ? `${buy.symbol}: cash ${agent.usdt.toFixed(2)} di bawah minimum $${minTicket}.`
+                : `${buy.symbol}: size ${target.toFixed(2)} USDT di bawah minimum $${minTicket}.`,
           });
-          if (agent.usdt < 1 || target < 1) break;
+          if (agent.usdt < minTicket || target < minTicket) break;
           continue;
         }
 
@@ -1165,6 +1183,17 @@ function periodsFrom(interval?: string) {
   if (interval === "1h") return 24 * 365;
   if (interval === "4h") return 6 * 365;
   return 12 * 24 * 365;
+}
+
+/** Positions large enough to trade. Dust below $1 does not consume a slot. */
+function materialPositions(agent: AgentRuntime, priceOf: (symbol: string) => number) {
+  let count = 0;
+  for (const [asset, qty] of Object.entries(agent.holdings)) {
+    if (!(qty > 0)) continue;
+    const price = priceOf(toSymbol(asset));
+    if (price > 0 && price * qty >= 1) count += 1;
+  }
+  return count;
 }
 
 function riskLimits(agent: AgentRuntime) {

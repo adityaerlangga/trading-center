@@ -17,6 +17,8 @@ export class BinanceWebSocket {
   private subscribeTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs = 1000;
   private subId = 1;
+  private lastRx = 0;
+  private watchTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly subs: KlineSub[],
@@ -25,11 +27,16 @@ export class BinanceWebSocket {
 
   start() {
     this.closedByUs = false;
+    this.lastRx = Date.now();
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = setInterval(() => this.watch(), 15_000);
     this.connect();
   }
 
   stop() {
     this.closedByUs = true;
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = null;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.subscribeTimer) clearTimeout(this.subscribeTimer);
     this.reconnectTimer = null;
@@ -49,7 +56,14 @@ export class BinanceWebSocket {
     return WS_HOSTS[this.hostIndex % WS_HOSTS.length];
   }
 
+  private watch() {
+    if (this.closedByUs || !this.ws) return;
+    if (Date.now() - this.lastRx < 60_000) return;
+    this.ws.close();
+  }
+
   private connect() {
+    this.lastRx = Date.now();
     const host = this.host();
     this.handlers.onStatus({
       connected: false,
@@ -137,6 +151,7 @@ export class BinanceWebSocket {
   }
 
   private handleMessage(raw: string) {
+    this.lastRx = Date.now();
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw) as Record<string, unknown>;
