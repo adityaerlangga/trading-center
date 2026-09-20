@@ -24,18 +24,36 @@ const empty: Snapshot = {
 };
 
 type StrategyOption = { name: string; label: string; note?: string; defaults: Record<string, number> };
+type DeskTab = "paper" | "live";
+
+function loadDeskTab(): DeskTab {
+  if (typeof window === "undefined") return "live";
+  return window.localStorage.getItem("deskEnv_v2") === "paper" ? "paper" : "live";
+}
 
 export function Dashboard() {
+  const [desk, setDesk] = useState<DeskTab>("live");
   const [snap, setSnap] = useState<Snapshot>(empty);
   const [busy, setBusy] = useState(false);
   const [strategies, setStrategies] = useState<StrategyOption[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  useEffect(() => {
+    setDesk(loadDeskTab());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem("deskEnv_v2", desk);
+    setSnap(empty);
+    setActionError("");
+  }, [desk]);
 
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
       try {
-        const res = await fetch("/api/snapshot", { cache: "no-store" });
+        const res = await fetch(`/api/snapshot?env=${desk}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as Snapshot;
         if (!cancelled) setSnap(data);
@@ -49,16 +67,19 @@ export function Dashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [desk]);
 
   useEffect(() => {
-    void fetch("/api/agents")
+    if (desk !== "paper") return;
+    void fetch(`/api/agents?env=paper`)
       .then((res) => res.json())
       .then((data: { strategies?: StrategyOption[] }) => {
         if (data.strategies) setStrategies(data.strategies);
       })
       .catch(() => undefined);
-  }, []);
+  }, [desk]);
+
+  const isLive = desk === "live";
 
   return (
     <div className="min-h-screen">
@@ -69,9 +90,32 @@ export function Dashboard() {
               Research desk
             </p>
             <h1 className="text-xl font-semibold tracking-tight">Trading Center</h1>
+            <div className="mt-2 flex gap-1">
+              {(
+                [
+                  ["paper", "Paper"],
+                  ["live", "Live"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    desk === key
+                      ? key === "live"
+                        ? "border-down bg-down/15 text-down"
+                        : "border-foreground bg-foreground text-background"
+                      : "border-line text-muted hover:bg-card"
+                  }`}
+                  onClick={() => setDesk(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge>{snap.mode.toUpperCase()}</Badge>
+            <Badge tone={isLive ? "down" : undefined}>{isLive ? "LIVE" : "PAPER"}</Badge>
             <Badge>{snap.interval}</Badge>
             <Badge>{snap.feed.universe} USDT pairs</Badge>
             <Badge>{snap.feeLabel || `fee ${(snap.feeRate * 100).toFixed(2)}%`}</Badge>
@@ -79,25 +123,42 @@ export function Dashboard() {
             <button
               className="rounded-full border border-line px-3 py-1.5 text-sm hover:bg-card"
               disabled={busy}
-              onClick={() => runAction(snap.running ? "stop" : "start", setBusy)}
+              onClick={() => void runAction(snap.running ? "stop" : "start", desk, setBusy, setActionError)}
             >
               {snap.starting ? "Starting…" : snap.running ? "Stop" : "Start"}
             </button>
             <button
               className="rounded-full border border-line px-3 py-1.5 text-sm hover:bg-card"
               disabled={busy}
-              onClick={() => runAction("reset", setBusy)}
+              onClick={() => {
+                if (
+                  isLive &&
+                  !confirm("Reset Live hanya reset state lokal (DB live). Tidak auto-sell posisi Binance.")
+                ) {
+                  return;
+                }
+                void runAction("reset", desk, setBusy, setActionError);
+              }}
             >
               Reset
             </button>
-            <button
-              className="rounded-full bg-foreground px-3 py-1.5 text-sm text-background"
-              onClick={() => setShowForm(true)}
-            >
-              New agent
-            </button>
+            {!isLive ? (
+              <button
+                className="rounded-full bg-foreground px-3 py-1.5 text-sm text-background"
+                onClick={() => setShowForm(true)}
+              >
+                New agent
+              </button>
+            ) : null}
           </div>
         </div>
+        {isLive ? (
+          <div className="border-t border-down/40 bg-down/10 px-5 py-2 text-center text-sm text-down">
+            Order Spot nyata · {snap.agents.length || 3} agent ({snap.live?.agentId ?? "—"}) · budget $
+            {(snap.live?.budgetUsdt ?? 0).toFixed(2)} · Spot USDT {(snap.live?.spotUsdt ?? 0).toFixed(2)} · keys{" "}
+            {snap.live?.keysConfigured ? "OK" : "belum di-set"}
+          </div>
+        ) : null}
         {snap.starting || (snap.feed.warmupTotal > 0 && snap.feed.warmupDone < snap.feed.warmupTotal) ? (
           <p className="border-t border-line px-5 py-2 text-center font-mono text-xs text-muted">
             Warmup klines {snap.feed.warmupDone}/{snap.feed.warmupTotal}
@@ -106,42 +167,60 @@ export function Dashboard() {
         {snap.feed.error ? (
           <p className="border-t border-line px-5 py-2 text-center text-sm text-down">{snap.feed.error}</p>
         ) : null}
+        {actionError ? (
+          <p className="border-t border-line px-5 py-2 text-center text-sm text-down">{actionError}</p>
+        ) : null}
       </header>
 
       <main className="mx-auto grid max-w-7xl gap-5 px-5 py-5">
-        <League rows={snap.league ?? []} btcReturnPct={snap.btcReturnPct ?? 0} regime={snap.regime ?? "chop"} />
-        <LabPanel />
+        {!isLive ? (
+          <>
+            <League rows={snap.league ?? []} btcReturnPct={snap.btcReturnPct ?? 0} regime={snap.regime ?? "chop"} />
+            <LabPanel />
+          </>
+        ) : (
+          <section className="rounded-2xl border border-down/30 bg-card p-5 text-sm">
+            <h2 className="text-lg font-semibold">Live agent</h2>
+            <p className="mt-1 text-muted">
+              1× <span className="font-mono">tsmom_atr</span> 5m lb6 minMom 0.01 (top paper 5m saat ini) · full Spot sleeve ·
+              alloc 100%.
+            </p>
+          </section>
+        )}
         {snap.agents.length === 0 ? (
           <section className="rounded-2xl border border-line bg-card p-6 text-sm text-muted">
-            Belum ada agent. Buat satu, pilih metode, isi saldo, lalu agent akan scan semua pair USDT.
+            {isLive
+              ? "Live belum running. Pastikan keys REAL + Spot USDT cukup, lalu Start."
+              : "Belum ada agent. Buat satu, pilih metode, isi saldo, lalu agent akan scan semua pair USDT."}
           </section>
         ) : (
-          <section className="grid gap-3 lg:grid-cols-3">
+          <section className={`grid gap-3 ${isLive ? "max-w-xl lg:grid-cols-1" : "lg:grid-cols-3"}`}>
             {[...snap.agents]
               .sort((a, b) => {
                 const rank = new Map((snap.league ?? []).map((row) => [row.id, row.rank]));
                 return (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999);
               })
-              .slice(0, 12)
+              .slice(0, isLive ? 1 : 12)
               .map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                points={snap.equity[agent.id] ?? []}
-                onDeleted={() =>
-                  setSnap((prev) => ({
-                    ...prev,
-                    agents: prev.agents.filter((row) => row.id !== agent.id),
-                  }))
-                }
-              />
-            ))}
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  points={snap.equity[agent.id] ?? []}
+                  desk={desk}
+                  onDeleted={() =>
+                    setSnap((prev) => ({
+                      ...prev,
+                      agents: prev.agents.filter((row) => row.id !== agent.id),
+                    }))
+                  }
+                />
+              ))}
           </section>
         )}
         <RecentTrades trades={snap.trades} />
       </main>
 
-      {showForm ? (
+      {showForm && !isLive ? (
         <CreateAgentForm
           strategies={strategies}
           onClose={() => setShowForm(false)}
@@ -158,15 +237,18 @@ export function Dashboard() {
 function AgentCard({
   agent,
   points,
+  desk = "paper",
   onDeleted,
 }: {
   agent: AgentView;
   points: { ts: number; equity: number }[];
+  desk?: DeskTab;
   onDeleted: () => void;
 }) {
   const up = agent.pnl >= 0;
   const nett = agentNett(agent.positions ?? []);
   const [deleting, setDeleting] = useState(false);
+  const isLive = desk === "live";
 
   async function remove(event: MouseEvent) {
     event.preventDefault();
@@ -174,7 +256,7 @@ function AgentCard({
     if (!confirm(`Hapus agent ${agent.id}?`)) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/agents/${agent.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/agents/${agent.id}?env=${desk}`, { method: "DELETE" });
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
         throw new Error(data.error ?? "Gagal hapus agent");
@@ -189,14 +271,16 @@ function AgentCard({
 
   return (
     <div className="relative rounded-2xl border border-line bg-card p-4 text-left transition hover:border-accent">
-      <button
-        className="absolute right-3 top-3 rounded-full border border-line px-2.5 py-1 text-xs text-muted hover:border-down hover:text-down"
-        disabled={deleting}
-        onClick={(event) => void remove(event)}
-      >
-        {deleting ? "…" : "Delete"}
-      </button>
-      <Link href={`/agents/${agent.id}`} className="block pr-16">
+      {!isLive ? (
+        <button
+          className="absolute right-3 top-3 rounded-full border border-line px-2.5 py-1 text-xs text-muted hover:border-down hover:text-down"
+          disabled={deleting}
+          onClick={(event) => void remove(event)}
+        >
+          {deleting ? "…" : "Delete"}
+        </button>
+      ) : null}
+      <Link href={`/agents/${agent.id}?env=${desk}`} className="block pr-16">
         <div>
           <p className="font-medium">
             {agent.id}
@@ -771,14 +855,24 @@ function feedLabel(snap: Snapshot) {
   return "Idle";
 }
 
-async function runAction(action: "start" | "stop" | "reset", setBusy: (v: boolean) => void) {
+async function runAction(
+  action: "start" | "stop" | "reset",
+  env: DeskTab,
+  setBusy: (v: boolean) => void,
+  setError: (v: string) => void,
+) {
   setBusy(true);
+  setError("");
   try {
-    await fetch("/api/engine", {
+    const res = await fetch("/api/engine", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, env }),
     });
+    const data = (await res.json()) as Snapshot & { error?: string };
+    if (!res.ok) throw new Error(data.error ?? `Gagal ${action}`);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
   } finally {
     setBusy(false);
   }

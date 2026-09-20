@@ -1,11 +1,13 @@
-import { getEngine } from "@/lib/engine";
+import { deskFromRequest, getDeskEngine } from "@/lib/desk-runtime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const engine = getEngine();
+export async function GET(request: Request) {
+  const env = deskFromRequest(request);
+  const engine = getDeskEngine(env);
   if (
+    env === "paper" &&
     !engine.running &&
     !engine.starting &&
     !engine.stoppedByUser &&

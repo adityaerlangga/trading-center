@@ -1,20 +1,26 @@
-import { getEngine } from "@/lib/engine";
+import { deskFromRequest, getDeskEngine } from "@/lib/desk-runtime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const detail = await getEngine().agentDetailFull(id);
+  const env = deskFromRequest(request);
+  const detail = await getDeskEngine(env).agentDetailFull(id);
   if (!detail) return Response.json({ error: "Agent not found" }, { status: 404 });
   return Response.json(detail);
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const body = (await request.json()) as { startingUsdt?: number | string; allocPct?: number };
+  const body = (await request.json()) as {
+    startingUsdt?: number | string;
+    allocPct?: number;
+    env?: string;
+  };
   try {
-    const agent = await getEngine().updateAgent(id, body);
+    const env = deskFromRequest(request, body.env);
+    const agent = await getDeskEngine(env).updateAgent(id, body);
     return Response.json(agent);
   } catch (error) {
     return Response.json(
@@ -24,10 +30,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   try {
-    await getEngine().removeAgent(id);
+    const env = deskFromRequest(request);
+    await getDeskEngine(env).removeAgent(id);
     return Response.json({ ok: true });
   } catch (error) {
     return Response.json(

@@ -15,11 +15,18 @@ export function AgentDetail({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [startingUsdt, setStartingUsdt] = useState("");
   const [saving, setSaving] = useState(false);
+  const [env, setEnv] = useState<"paper" | "live">("paper");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search).get("env");
+    setEnv(q === "live" || id.startsWith("live_") ? "live" : "paper");
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
-      const res = await fetch(`/api/agents/${id}`, { cache: "no-store" });
+      const res = await fetch(`/api/agents/${id}?env=${env}`, { cache: "no-store" });
       if (!res.ok) {
         if (!cancelled) setError("Agent not found");
         return;
@@ -36,15 +43,15 @@ export function AgentDetail({ id }: { id: string }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [id]);
+  }, [id, env]);
 
   async function saveBalance() {
     setSaving(true);
     try {
-      const res = await fetch(`/api/agents/${id}`, {
+      const res = await fetch(`/api/agents/${id}?env=${env}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startingUsdt }),
+        body: JSON.stringify({ startingUsdt, env }),
       });
       const data = (await res.json()) as Detail & { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Gagal update saldo");
@@ -58,7 +65,7 @@ export function AgentDetail({ id }: { id: string }) {
 
   async function remove() {
     if (!confirm(`Hapus agent ${id}?`)) return;
-    const res = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/agents/${id}?env=${env}`, { method: "DELETE" });
     if (!res.ok) {
       const data = (await res.json()) as { error?: string };
       alert(data.error ?? "Gagal hapus agent");

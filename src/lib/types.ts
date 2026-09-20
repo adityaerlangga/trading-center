@@ -161,6 +161,12 @@ export type Snapshot = {
   league: LeagueRow[];
   btcReturnPct: number;
   regime: "trend" | "chop";
+  live?: {
+    keysConfigured: boolean;
+    spotUsdt: number;
+    budgetUsdt: number;
+    agentId: string;
+  };
 };
 
 export type LeagueRow = {

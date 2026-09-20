@@ -145,8 +145,12 @@ export class PaperEngine {
   async agentDetailFull(id: string) {
     const agent = this.agents.find((row) => row.id === id);
     if (!agent) return null;
-    const trades = await loadAgentTrades(id);
+    const trades = await this.loadTradesFor(id);
     return this.agentDetailFrom(agent, trades);
+  }
+
+  protected async loadTradesFor(id: string) {
+    return loadAgentTrades(id);
   }
 
   private agentDetailFrom(agent: AgentRuntime, trades: Trade[]) {
@@ -168,7 +172,8 @@ export class PaperEngine {
     this.feed = emptyFeed();
 
     try {
-      this.config = loadConfig();
+      this.config = this.loadDeskConfig();
+      await this.beforeStart();
       await this.refreshFees();
       await this.loadAgents();
       await this.ensureSamples();
@@ -220,7 +225,7 @@ export class PaperEngine {
 
   async reset() {
     await this.stop();
-    await resetPortfolios();
+    await this.resetDeskPortfolios();
     this.quotes = {};
       this.candles = {};
       this.books = {};
@@ -231,6 +236,18 @@ export class PaperEngine {
     this.pendingCloses.clear();
     this.thoughts.clear();
     await this.start();
+  }
+
+  protected loadDeskConfig(): AppConfig {
+    return loadConfig();
+  }
+
+  protected async beforeStart() {
+    // paper: no extra gate
+  }
+
+  protected async resetDeskPortfolios() {
+    await resetPortfolios();
   }
 
   async createAgent(input: CreateAgentInput) {
@@ -260,14 +277,14 @@ export class PaperEngine {
     };
     this.agents.push(agent);
     this.equity[id] = [];
-    await insertAgent(agent);
+    await this.persistAgent(agent);
     const warmed = this.feed.warmupTotal > 0 && this.feed.warmupDone >= this.feed.warmupTotal;
     if (warmed && this.universe.length > 0) {
       this.note(id, {
         action: "scan",
         reason: `Agent baru. Langsung scan ${this.universeFor(agent).length} pair. Interval ${agent.interval}.`,
       });
-      this.scanOne(agent, this.universeFor(agent));
+      void this.scanOne(agent, this.universeFor(agent));
     } else {
       this.note(id, {
         action: "wait",
@@ -294,7 +311,7 @@ export class PaperEngine {
     if (patch.allocPct != null) {
       agent.allocPct = clampAlloc(patch.allocPct);
     }
-    await insertAgent(agent);
+    await this.persistAgent(agent);
     return this.view(agent);
   }
 
@@ -303,11 +320,27 @@ export class PaperEngine {
     this.trades = this.trades.filter((trade) => trade.agentId !== id);
     delete this.equity[id];
     this.thoughts.delete(id);
-    await deleteAgentRow(id);
+    await this.deletePersistedAgent(id);
   }
 
   strategies() {
     return listScannerStrategies();
+  }
+
+  protected async persistAgent(agent: AgentRuntime) {
+    await insertAgent(agent);
+  }
+
+  protected async deletePersistedAgent(id: string) {
+    await deleteAgentRow(id);
+  }
+
+  protected async persistAgents(agents: AgentRuntime[]) {
+    await insertAgents(agents);
+  }
+
+  protected async persistTrade(trade: Trade) {
+    await insertTrade(trade);
   }
 
   private async refreshFees() {
@@ -320,8 +353,8 @@ export class PaperEngine {
     if (this.fees.fetchedAt === 0) this.fees.fetchedAt = Date.now();
   }
 
-  private async loadAgents() {
-    const saved = await loadState();
+  protected async loadAgents() {
+    const saved = await this.loadDeskState();
     if (saved && saved.agents.length > 0) {
       this.agents = saved.agents
         .map((agent): AgentRuntime => ({
@@ -343,7 +376,7 @@ export class PaperEngine {
           }
         });
       if (this.agents.length === 0) {
-        this.agents = SEED_AGENTS.map((agent) => ({ ...agent, holdings: {} }));
+        this.agents = this.defaultAgents();
       }
       this.trades = saved.trades;
       this.equity = saved.equity;
@@ -352,12 +385,24 @@ export class PaperEngine {
       for (const agent of this.agents) this.releasePegs(agent);
       return;
     }
-    this.agents = SEED_AGENTS.map((agent) => ({ ...agent, holdings: {} }));
+    this.agents = this.defaultAgents();
     this.trades = [];
     this.equity = Object.fromEntries(this.agents.map((agent) => [agent.id, []]));
   }
 
-  private async ensureSamples() {
+  protected defaultAgents(): AgentRuntime[] {
+    return SEED_AGENTS.map((agent) => ({ ...agent, holdings: {} }));
+  }
+
+  protected async loadDeskState() {
+    return loadState();
+  }
+
+  protected async saveDeskState(state: Parameters<typeof saveState>[0]) {
+    await saveState(state);
+  }
+
+  protected async ensureSamples() {
     const existing = new Set(this.agents.map((agent) => agent.id));
     const fresh: AgentRuntime[] = [];
     for (const spec of sampleRoster()) {
@@ -383,7 +428,7 @@ export class PaperEngine {
       this.equity[agent.id] ??= [];
     }
     if (fresh.length === 0) return;
-    await insertAgents(fresh);
+    await this.persistAgents(fresh);
     console.log(`seeded ${fresh.length} speed-trading agents at $100`);
   }
 
@@ -489,13 +534,13 @@ export class PaperEngine {
       for (const agent of this.agents) {
         if (agent.status === "killed" || this.agentInterval(agent) !== interval) continue;
         const scope = agent.params.liquid ? this.universeFor(agent) : [...symbols];
-        this.scanOne(agent, scope);
+        void this.scanOne(agent, scope);
       }
     }
     this.recordEquity();
   }
 
-  private agentInterval(agent: AgentRuntime) {
+  protected agentInterval(agent: AgentRuntime) {
     return agent.interval || this.config?.interval || "5m";
   }
 
@@ -515,7 +560,7 @@ export class PaperEngine {
     return this.liquid.length > 0 ? this.liquid : this.universe.slice(0, 24);
   }
 
-  private universeFor(agent: AgentRuntime) {
+  protected universeFor(agent: AgentRuntime) {
     if (agent.params.liquid) return this.symbolsForInterval(this.agentInterval(agent));
     return this.universe;
   }
@@ -524,11 +569,11 @@ export class PaperEngine {
     return this.activeIntervals().reduce((sum, interval) => sum + this.symbolsForInterval(interval).length, 0);
   }
 
-  private series(interval: string) {
+  protected series(interval: string) {
     return this.books[interval] ?? (interval === (this.config?.interval ?? "5m") ? this.candles : {});
   }
 
-  private lastClose(symbol: string) {
+  protected lastClose(symbol: string) {
     for (const interval of ["1s", "1m", "3m", "5m", "15m", "1h", this.config?.interval ?? "5m"]) {
       const close = this.books[interval]?.[symbol]?.at(-1)?.close ?? this.candles[symbol]?.at(-1)?.close;
       if (close) return close;
@@ -539,7 +584,7 @@ export class PaperEngine {
   private scanAll() {
     for (const agent of this.agents) {
       if (agent.status === "killed") continue;
-      this.scanOne(agent, this.universeFor(agent));
+      void this.scanOne(agent, this.universeFor(agent));
     }
   }
 
@@ -548,11 +593,11 @@ export class PaperEngine {
     for (const agent of this.agents) {
       if (agent.status === "killed") continue;
       const scope = agent.params.liquid ? this.universeFor(agent) : symbols;
-      this.scanOne(agent, scope);
+      void this.scanOne(agent, scope);
     }
   }
 
-  private scanOne(agent: AgentRuntime, symbols: string[]) {
+  protected async scanOne(agent: AgentRuntime, symbols: string[]) {
     if (!this.config) return;
     try {
       const strategy = getStrategy(agent.strategy);
@@ -610,7 +655,7 @@ export class PaperEngine {
       });
 
       for (const sell of sells) {
-        const filled = this.fill(agent, sell.symbol, "SELL", 1);
+        const filled = await this.fill(agent, sell.symbol, "SELL", 1);
         this.note(agent.id, {
           action: filled ? "sell" : "skip",
           symbol: sell.symbol,
@@ -665,7 +710,7 @@ export class PaperEngine {
         }
 
         const sizePct = Math.min(1, target / agent.usdt);
-        const filled = this.fill(agent, buy.symbol, "BUY", sizePct);
+        const filled = await this.fill(agent, buy.symbol, "BUY", sizePct);
         this.note(agent.id, {
           action: filled ? "buy" : "skip",
           symbol: buy.symbol,
@@ -705,7 +750,7 @@ export class PaperEngine {
     }
   }
 
-  private currentRegime() {
+  protected currentRegime() {
     const candles =
       this.series("5m").BTCUSDT ??
       this.series("15m").BTCUSDT ??
@@ -714,7 +759,7 @@ export class PaperEngine {
     return btcRegime(candles);
   }
 
-  private fill(agent: AgentRuntime, symbol: string, side: "BUY" | "SELL", sizePct: number) {
+  protected async fill(agent: AgentRuntime, symbol: string, side: "BUY" | "SELL", sizePct: number) {
     if (!this.config) return false;
     if (side === "BUY" && isPegged(symbol)) return false;
     const quote = this.quotes[symbol];
@@ -737,13 +782,13 @@ export class PaperEngine {
     if (this.trades.length > MAX_TRADES) {
       this.trades.splice(0, this.trades.length - MAX_TRADES);
     }
-    void insertTrade(trade).catch((error) => {
+    void this.persistTrade(trade).catch((error) => {
       console.error("failed to persist trade", error);
     });
     return true;
   }
 
-  private view(agent: AgentRuntime): AgentView {
+  protected view(agent: AgentRuntime): AgentView {
     const positions = this.positionsOf(agent);
     const equity = roundUsd(agent.usdt + positions.reduce((sum, pos) => sum + pos.value, 0));
     const pnl = roundUsd(equity - agent.startingUsdt);
@@ -785,7 +830,7 @@ export class PaperEngine {
     };
   }
 
-  private tickLeague() {
+  protected tickLeague() {
     const now = Date.now();
     if (now - this.lastLeagueTs < 6 * 60 * 60_000) return;
     this.lastLeagueTs = now;
@@ -843,7 +888,7 @@ export class PaperEngine {
     return (now / agent.btcAtBirth - 1) * 100;
   }
 
-  private btcReturnPct() {
+  protected btcReturnPct() {
     const ref = this.agents.find((agent) => agent.btcAtBirth > 0);
     return ref ? this.btcReturnSince(ref) : 0;
   }
@@ -890,7 +935,7 @@ export class PaperEngine {
       .map((row, index) => ({ ...row, rank: index + 1 }));
   }
 
-  private ensureThought(id: string): AgentThought {
+  protected ensureThought(id: string): AgentThought {
     const current = this.thoughts.get(id);
     if (current) return current;
     const created: AgentThought = {
@@ -908,7 +953,7 @@ export class PaperEngine {
     return created;
   }
 
-  private publicThought(id: string): AgentThought {
+  protected publicThought(id: string): AgentThought {
     const thought = this.ensureThought(id);
     if ((this.starting || this.feed.warmupDone < this.feed.warmupTotal) && thought.lastScanAt == null) {
       thought.status = "warming";
@@ -919,14 +964,14 @@ export class PaperEngine {
     return thought;
   }
 
-  private note(id: string, thought: Omit<Thought, "ts">) {
+  protected note(id: string, thought: Omit<Thought, "ts">) {
     const state = this.ensureThought(id);
     state.notes.unshift({ ...thought, ts: Date.now() });
     if (state.notes.length > 40) state.notes.length = 40;
     state.summary = thought.reason;
   }
 
-  private summarize(id: string, interval: string) {
+  protected summarize(id: string, interval: string) {
     const thought = this.ensureThought(id);
     const top = thought.topBuys[0];
     if (top) {
@@ -944,7 +989,7 @@ export class PaperEngine {
       if (agent.status === "killed") continue;
       const thought = this.thoughts.get(agent.id);
       if (!thought || thought.lastScanAt == null) {
-        this.scanOne(agent, this.universeFor(agent));
+        void this.scanOne(agent, this.universeFor(agent));
         budget -= 1;
       }
     }
@@ -959,7 +1004,7 @@ export class PaperEngine {
     return sample + ms;
   }
 
-  private positionsOf(agent: AgentRuntime, trades = this.trades): PositionView[] {
+  protected positionsOf(agent: AgentRuntime, trades = this.trades): PositionView[] {
     const agentTrades = trades.filter((trade) => trade.agentId === agent.id);
     return Object.entries(agent.holdings)
       .filter(([, qty]) => qty > 0)
@@ -996,11 +1041,11 @@ export class PaperEngine {
       .sort((a, b) => b.netPnl - a.netPnl);
   }
 
-  private markEquity(agent: AgentRuntime) {
+  protected markEquity(agent: AgentRuntime) {
     return agent.usdt + this.positionsOf(agent).reduce((sum, pos) => sum + pos.value, 0);
   }
 
-  private quotesFor(agents: AgentView[]) {
+  protected quotesFor(agents: AgentView[]) {
     const needed = new Set<string>();
     for (const agent of agents) {
       for (const pos of agent.positions) needed.add(pos.symbol);
@@ -1025,7 +1070,7 @@ export class PaperEngine {
     }
   }
 
-  private persist() {
+  protected persist() {
     if (this.persisting || this.agents.length === 0) return Promise.resolve();
     this.persisting = true;
     const equity: Record<string, EquityPoint[]> = {};
@@ -1037,7 +1082,7 @@ export class PaperEngine {
       equity[id] = fresh;
       marks.push([id, fresh[fresh.length - 1].ts]);
     }
-    return saveState({
+    return this.saveDeskState({
       startedAt: this.startedAt,
       agents: this.agents,
       trades: this.trades,
@@ -1047,7 +1092,7 @@ export class PaperEngine {
         for (const [id, ts] of marks) this.equityMark.set(id, ts);
       })
       .catch((error) => {
-        console.error("failed to persist paper state", error);
+        console.error("failed to persist desk state", error);
       })
       .finally(() => {
         this.persisting = false;
@@ -1143,7 +1188,7 @@ function clampAlloc(value: number) {
   return Math.min(1, Math.max(0.01, value));
 }
 
-export function getEngine(): PaperEngine {
+export function getPaperEngine(): PaperEngine {
   const globalForEngine = globalThis as typeof globalThis & {
     __paperEngine?: PaperEngine;
   };
@@ -1152,3 +1197,4 @@ export function getEngine(): PaperEngine {
   }
   return globalForEngine.__paperEngine;
 }
+

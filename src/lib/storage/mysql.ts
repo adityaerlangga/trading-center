@@ -103,6 +103,59 @@ export async function ensureSchema() {
       INDEX idx_equity_agent_ts (agent_id, ts)
     )
   `);
+
+  // Live desk mirrors paper tables so resets never mix real fills with paper league state.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS meta_live (
+      k VARCHAR(64) PRIMARY KEY,
+      v TEXT NOT NULL
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS agents_live (
+      id VARCHAR(64) PRIMARY KEY,
+      strategy VARCHAR(64) NOT NULL,
+      symbol VARCHAR(32) NULL,
+      starting_usdt DECIMAL(18,2) NOT NULL,
+      params JSON NOT NULL,
+      usdt DECIMAL(18,8) NOT NULL,
+      holdings JSON NOT NULL,
+      last_signal VARCHAR(8) NOT NULL,
+      last_error TEXT NULL,
+      last_symbol VARCHAR(32) NULL,
+      alloc_pct DECIMAL(8,4) NOT NULL DEFAULT 0.10,
+      base_alloc DECIMAL(8,4) NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      born_at BIGINT NULL,
+      btc_at_birth DECIMAL(18,8) NULL,
+      trade_interval VARCHAR(8) NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS trades_live (
+      id CHAR(36) PRIMARY KEY,
+      agent_id VARCHAR(64) NOT NULL,
+      symbol VARCHAR(32) NOT NULL,
+      side ENUM('BUY','SELL') NOT NULL,
+      qty DECIMAL(18,8) NOT NULL,
+      price DECIMAL(18,8) NOT NULL,
+      fee DECIMAL(18,8) NOT NULL,
+      ts BIGINT NOT NULL,
+      INDEX idx_trades_live_agent_ts (agent_id, ts),
+      INDEX idx_trades_live_ts (ts)
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS equity_points_live (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      agent_id VARCHAR(64) NOT NULL,
+      ts BIGINT NOT NULL,
+      equity DECIMAL(18,2) NOT NULL,
+      UNIQUE KEY uniq_equity_live_agent_ts (agent_id, ts),
+      INDEX idx_equity_live_agent_ts (agent_id, ts)
+    )
+  `);
 }
 
 export async function query<T extends RowDataPacket>(sql: string) {

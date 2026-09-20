@@ -1,11 +1,12 @@
-import { getEngine } from "@/lib/engine";
+import { deskFromRequest, getDeskEngine } from "@/lib/desk-runtime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { action?: string };
-  const engine = getEngine();
+  const body = (await request.json().catch(() => ({}))) as { action?: string; env?: string };
+  const env = deskFromRequest(request, body.env);
+  const engine = getDeskEngine(env);
 
   try {
     if (body.action === "start") await engine.start();

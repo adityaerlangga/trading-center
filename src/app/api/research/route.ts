@@ -1,4 +1,4 @@
-import { getEngine } from "@/lib/engine";
+import { getPaperEngine } from "@/lib/engine";
 import { getExperiment, listExperiments } from "@/lib/storage/experiments";
 import { parseMoney } from "@/lib/money";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Walk-forward belum lolos. Tidak dipromosikan." }, { status: 400 });
   }
   try {
-    const engine = getEngine();
+    const engine = getPaperEngine();
     if (!engine.running && !engine.starting) await engine.start();
     const agent = await engine.createAgent({
       name: body.name || `${report.strategy}_${report.id.slice(0, 8)}`,
