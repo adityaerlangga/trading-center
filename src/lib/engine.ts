@@ -98,10 +98,10 @@ export class PaperEngine {
   private quoteTimer: ReturnType<typeof setInterval> | null = null;
   private pendingCloses = new Map<string, Set<string>>();
   private lastEquityTs = 0;
-  private thoughts = new Map<string, AgentThought>();
   private lastLeagueTs = 0;
   private persisting = false;
   private equityMark = new Map<string, number>();
+  protected thoughts = new Map<string, AgentThought>();
 
   snapshot(): Snapshot {
     this.maybeBackfillScan();

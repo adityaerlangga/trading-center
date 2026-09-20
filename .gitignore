@@ -43,3 +43,6 @@ next-env.d.ts
 
 # paper trading local state
 /data
+
+# background desk
+/logs
