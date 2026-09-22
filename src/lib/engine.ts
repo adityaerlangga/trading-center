@@ -454,6 +454,13 @@ export class PaperEngine {
     const existing = new Set(this.agents.map((agent) => agent.id));
     const fresh: AgentRuntime[] = [];
     for (const spec of roster) {
+      const current = this.agents.find((agent) => agent.id === spec.id);
+      if (current) {
+        // Keep liquid scans cheap after prune/redeploy.
+        current.params = { ...current.params, ...spec.params, liquid: 1 };
+        current.interval = spec.interval;
+        continue;
+      }
       if (existing.has(spec.id)) continue;
       const strategy = getStrategy(spec.strategy);
       const agent: AgentRuntime = {
