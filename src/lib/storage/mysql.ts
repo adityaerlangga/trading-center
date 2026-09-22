@@ -73,6 +73,8 @@ export async function ensureSchema() {
   await db.query(`ALTER TABLE agents ADD COLUMN born_at BIGINT NULL`).catch(() => undefined);
   await db.query(`ALTER TABLE agents ADD COLUMN btc_at_birth DECIMAL(18,8) NULL`).catch(() => undefined);
   await db.query(`ALTER TABLE agents ADD COLUMN trade_interval VARCHAR(8) NULL`).catch(() => undefined);
+  await db.query(`ALTER TABLE agents ADD COLUMN base_alloc DECIMAL(8,4) NULL`).catch(() => undefined);
+  await db.query(`ALTER TABLE agents_live ADD COLUMN base_alloc DECIMAL(8,4) NULL`).catch(() => undefined);
   await db.query(`
     CREATE TABLE IF NOT EXISTS experiments (
       id CHAR(36) PRIMARY KEY,
