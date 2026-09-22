@@ -1,0 +1,84 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: trading_center
+      MYSQL_USER: trading
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - trading_mysql_data:/var/lib/mysql
+    networks:
+      - coolify
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build: .
+    image: trading-center:latest
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: trading
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: trading_center
+      PAPER_AUTOSTART: ${PAPER_AUTOSTART:-1}
+      LIVE_AUTOSTART: ${LIVE_AUTOSTART:-1}
+      LIVE_BUDGET_USDT: ${LIVE_BUDGET_USDT:-100}
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      BINANCE_API_KEY_REAL: ${BINANCE_API_KEY_REAL:-}
+      BINANCE_API_SECRET_REAL: ${BINANCE_API_SECRET_REAL:-}
+      DESK_AUTH_USER: ${DESK_AUTH_USER}
+      DESK_AUTH_PASSWORD: ${DESK_AUTH_PASSWORD}
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    expose:
+      - "3000"
+    networks:
+      coolify:
+        aliases:
+          - trading-center
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.http-0-trading-center.entryPoints=http
+      - traefik.http.routers.http-0-trading-center.middlewares=redirect-to-https
+      - traefik.http.routers.http-0-trading-center.rule=Host(`trading.adityaerlangga.com`) && PathPrefix(`/`)
+      - traefik.http.routers.http-0-trading-center.service=http-0-trading-center
+      - traefik.http.routers.https-0-trading-center.entryPoints=https
+      - traefik.http.routers.https-0-trading-center.middlewares=gzip
+      - traefik.http.routers.https-0-trading-center.rule=Host(`trading.adityaerlangga.com`) && PathPrefix(`/`)
+      - traefik.http.routers.https-0-trading-center.service=https-0-trading-center
+      - traefik.http.routers.https-0-trading-center.tls.certresolver=letsencrypt
+      - traefik.http.routers.https-0-trading-center.tls=true
+      - traefik.http.services.http-0-trading-center.loadbalancer.server.port=3000
+      - traefik.http.services.https-0-trading-center.loadbalancer.server.port=3000
+      - coolify.managed=true
+      - coolify.resourceName=trading-center
+      - coolify.projectName=personal
+      - coolify.environmentName=production
+
+networks:
+  coolify:
+    external: true
+    name: coolify
+
+volumes:
+  trading_mysql_data:
