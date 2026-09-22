@@ -651,6 +651,23 @@ export class PaperEngine {
               reason: `${symbol}: overlay chandelier ATR — ${close.toFixed(6)} < ${stop.toFixed(6)} (Wilder)`,
             });
           }
+          const hardStopPct = Number(params.hardStopPct ?? 0);
+          if (hardStopPct > 0 && close != null && !sells.some((row) => row.symbol === symbol)) {
+            const lot = openLot(
+              this.trades.filter((trade) => trade.agentId === agent.id),
+              symbol,
+              holdingQty(agent, symbol),
+            );
+            if (lot.entryPrice > 0) {
+              const dd = (close - lot.entryPrice) / lot.entryPrice;
+              if (dd <= -hardStopPct) {
+                sells.push({
+                  symbol,
+                  reason: `${symbol}: hard stop ${(dd * 100).toFixed(2)}% ≤ -${(hardStopPct * 100).toFixed(1)}% dari entry ${lot.entryPrice.toFixed(6)}`,
+                });
+              }
+            }
+          }
         }
       }
 

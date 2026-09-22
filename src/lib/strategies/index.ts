@@ -115,6 +115,14 @@ const tsmomAtr: Strategy = {
         reason: `${symbol}: TSMOM ${pct(mom)} < ${pct(minMom)} — belum cukup kuat, hold cash`,
       };
     }
+    const maxMom = params.maxMom ?? 0;
+    if (maxMom > 0 && mom > maxMom) {
+      return {
+        signal: "HOLD",
+        score: mom,
+        reason: `${symbol}: TSMOM ${pct(mom)} > ${pct(maxMom)} — sudah terlalu extended, skip chase`,
+      };
+    }
     if (close <= trend || !slopeUp) {
       return {
         signal: "HOLD",
