@@ -14,6 +14,7 @@ export type ChampionPick = {
 
 const WINDOW_MS = 24 * 60 * 60_000;
 const MIN_AGE_MS = 45 * 60_000;
+const MIN_TRADES = 5;
 
 /** Recent equity return over ~24h; falls back to full pnl if series is short. */
 export function recentEquityPct(series: EquityPoint[], startingUsdt: number, now = Date.now()) {
@@ -41,12 +42,12 @@ export function scorePaperAgent(input: {
   const now = input.now ?? Date.now();
   if (input.agent.status === "killed") return null;
   if (now - (input.agent.bornAt || now) < MIN_AGE_MS) return null;
-  if (input.tradeCount < 1) return null;
+  if (input.tradeCount < MIN_TRADES) return null;
 
   const recentPct = recentEquityPct(input.equity, input.agent.startingUsdt, now);
   // Prefer agents that made money recently; mild boost for lifetime pnl/sharpe.
   const score = recentPct * 1.2 + input.pnlPct * 0.35 + input.sharpe * 2;
-  if (!(recentPct > 0.2) && !(input.pnlPct > 0.5) && !(score > 1)) return null;
+  if (!(recentPct > 0) && !(input.pnlPct > 0.3) && !(score > 0.5)) return null;
 
   const { strategy, interval, params } = input.agent;
   return {

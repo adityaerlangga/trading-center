@@ -1,4 +1,4 @@
-import { PaperEngine, getPaperEngine, materialPositions } from "./engine";
+import { PaperEngine, getPaperEngine, materialPositions, MAX_TRADES } from "./engine";
 import {
   LIVE_AGENT_SPECS,
   LIVE_ENSEMBLE_MS,
@@ -14,16 +14,21 @@ import { getStrategy } from "./strategies/index";
 import { takerFee } from "./market/fees";
 import { isPegged } from "./config";
 import { midPrice, roundUsd } from "./paper/math";
+import { countTradesByAgent } from "./storage/store";
 import {
   deleteLiveAgent,
+  getLiveMeta,
   insertLiveAgent,
   insertLiveTrade,
   loadLiveAgentTrades,
   loadLiveState,
   resetLivePortfolios,
   saveLiveState,
+  setLiveMeta,
 } from "./storage/live-store";
 import type { AgentRuntime, AppConfig, CreateAgentInput, Snapshot, Trade } from "./types";
+
+const CHAMPION_META_KEY = "champion";
 
 export class LiveEngine extends PaperEngine {
   spotUsdt = 0;
@@ -88,6 +93,7 @@ export class LiveEngine extends PaperEngine {
     this.spotUsdt = await fetchSpotUsdtFree();
     // Sleeve for brand-new agents only; existing mirrors keep DB startingUsdt/holdings.
     this.budgetUsdt = roundUsd(Math.min(Math.max(this.spotUsdt, 5), liveBudgetUsdt()));
+    await this.restoreChampion();
   }
 
   protected async resetDeskPortfolios() {
@@ -152,6 +158,40 @@ export class LiveEngine extends PaperEngine {
 
   private isFlat(agent: AgentRuntime) {
     return materialPositions(agent, this.markOf) === 0;
+  }
+
+  private async restoreChampion() {
+    try {
+      const raw = await getLiveMeta(CHAMPION_META_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as ChampionPick;
+      if (!parsed?.paperId || !parsed?.strategy) return;
+      this.champion = {
+        paperId: parsed.paperId,
+        strategy: parsed.strategy,
+        interval: parsed.interval || "5m",
+        params: parsed.params && typeof parsed.params === "object" ? parsed.params : {},
+        score: Number(parsed.score) || 0,
+        recentPct: Number(parsed.recentPct) || 0,
+        pnlPct: Number(parsed.pnlPct) || 0,
+        sharpe: Number(parsed.sharpe) || 0,
+        tradeCount: Number(parsed.tradeCount) || 0,
+      };
+    } catch (error) {
+      console.error("failed to restore live champion", error);
+    }
+  }
+
+  private async persistChampion(winner: ChampionPick | null) {
+    try {
+      if (!winner) {
+        await setLiveMeta(CHAMPION_META_KEY, "");
+        return;
+      }
+      await setLiveMeta(CHAMPION_META_KEY, JSON.stringify(winner));
+    } catch (error) {
+      console.error("failed to persist live champion", error);
+    }
   }
 
   protected async ensureSamples() {
@@ -228,6 +268,7 @@ export class LiveEngine extends PaperEngine {
     if (paper.starting || paper.agents.length === 0) return;
 
     const snap = paper.snapshot();
+    const tradeCounts = await countTradesByAgent();
     const ranked: ChampionPick[] = [];
     for (const row of snap.agents) {
       const runtime = paper.agents.find((agent) => agent.id === row.id);
@@ -235,7 +276,7 @@ export class LiveEngine extends PaperEngine {
       const pick = scorePaperAgent({
         agent: runtime,
         equity: snap.equity[row.id] ?? [],
-        tradeCount: row.tradeCount,
+        tradeCount: tradeCounts[row.id] ?? 0,
         sharpe: row.sharpe,
         pnlPct: row.pnlPct,
       });
@@ -257,7 +298,10 @@ export class LiveEngine extends PaperEngine {
       this.champion.strategy !== winner.strategy ||
       this.champion.interval !== winner.interval;
 
+    // Always remember the winner; only defer strategy mutation when non-flat.
     this.champion = winner;
+    await this.persistChampion(winner);
+
     const live = this.agents[0];
     if (!live) return;
 
@@ -287,7 +331,7 @@ export class LiveEngine extends PaperEngine {
     await this.persistAgent(live);
     this.note(live.id, {
       action: "wait",
-      reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: TP +6% / SL -5% / no-chase.`,
+      reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: TP +9% / SL -3% / no-chase.`,
     });
     void this.persist();
   }
@@ -350,7 +394,7 @@ export class LiveEngine extends PaperEngine {
       agent.lastSymbol = symbol;
       agent.lastError = undefined;
       this.trades.push(trade);
-      if (this.trades.length > 400) this.trades.splice(0, this.trades.length - 400);
+      if (this.trades.length > MAX_TRADES) this.trades.splice(0, this.trades.length - MAX_TRADES);
       void this.persistTrade(trade).catch((error) => {
         console.error("failed to persist live trade", error);
       });

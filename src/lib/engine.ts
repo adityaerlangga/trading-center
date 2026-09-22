@@ -39,7 +39,7 @@ import type {
   LeagueRow,
 } from "./types";
 
-const MAX_TRADES = 400;
+export const MAX_TRADES = 20_000;
 const MAX_EQUITY = 400;
 
 const SEED_AGENTS: AgentRuntime[] = [

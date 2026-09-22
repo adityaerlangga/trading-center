@@ -28,11 +28,11 @@ export type LiveAgentSpec = {
 /** Always layered on top of whatever paper champion we copy. */
 export const LIVE_RISK_PARAMS: Record<string, number> = {
   liquid: 1,
-  maxPositions: 2,
-  hardStopPct: 0.05,
-  takeProfitPct: 0.06,
-  maxMom: 0.04,
-  startDelay: 0,
+  maxPositions: 1,
+  hardStopPct: 0.03,
+  takeProfitPct: 0.09,
+  maxMom: 0.025,
+  startDelay: 1,
 };
 
 /**
@@ -45,11 +45,12 @@ export const LIVE_AGENT_SPECS: LiveAgentSpec[] = [
     strategy: "tsmom_atr",
     interval: "5m",
     params: {
-      lookback: 6,
-      minMom: 0.01,
+      lookback: 48,
+      minMom: 0.02,
+      minVolRatio: 1.5,
       ...LIVE_RISK_PARAMS,
     },
-    allocPct: 0.5,
+    allocPct: 0.25,
   },
 ];
 

@@ -50,7 +50,7 @@ export async function loadLiveState(): Promise<PersistedState | null> {
   if (agents.length === 0) return null;
 
   const trades = await query<TradeRow>(
-    "SELECT * FROM trades_live ORDER BY ts DESC, id DESC LIMIT 400",
+    "SELECT * FROM trades_live ORDER BY ts DESC, id DESC LIMIT 4000",
   );
   const points = await query<EquityRow>(
     "SELECT agent_id, ts, equity FROM equity_points_live ORDER BY agent_id, ts",
@@ -179,6 +179,22 @@ export async function insertLiveTrade(trade: Trade) {
     `INSERT IGNORE INTO trades_live (id, agent_id, symbol, side, qty, price, fee, ts)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [trade.id, trade.agentId, trade.symbol, trade.side, trade.qty, trade.price, trade.fee, trade.ts],
+  );
+}
+
+export async function getLiveMeta(key: string): Promise<string | null> {
+  await readyLiveDb();
+  const [rows] = await getPool().query<MetaRow[]>("SELECT v FROM meta_live WHERE k = ?", [key]);
+  const value = rows[0]?.v;
+  if (value == null || value === "") return null;
+  return String(value);
+}
+
+export async function setLiveMeta(key: string, value: string) {
+  await readyLiveDb();
+  await getPool().query(
+    "INSERT INTO meta_live (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)",
+    [key, value],
   );
 }
 

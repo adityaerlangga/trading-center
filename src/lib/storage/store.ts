@@ -76,7 +76,7 @@ export async function loadState(): Promise<PersistedState | null> {
   if (agents.length === 0) return null;
 
   const trades = await query<TradeRow>(
-    "SELECT * FROM trades ORDER BY ts DESC, id DESC LIMIT 400",
+    "SELECT * FROM trades ORDER BY ts DESC, id DESC LIMIT 20000",
   );
   const db = getPool();
   const [maxRows] = await db.query<RowDataPacket[]>("SELECT MAX(id) AS id FROM equity_points");
@@ -213,6 +213,17 @@ export async function loadAgentTrades(agentId: string): Promise<Trade[]> {
     fee: Number(row.fee),
     ts: Number(row.ts),
   }));
+}
+
+/** Per-agent fill counts from MySQL (not the in-memory ring). */
+export async function countTradesByAgent(): Promise<Record<string, number>> {
+  await readyDb();
+  const [rows] = await getPool().query<(RowDataPacket & { agent_id: string; n: number | string })[]>(
+    "SELECT agent_id, COUNT(*) AS n FROM trades GROUP BY agent_id",
+  );
+  const out: Record<string, number> = {};
+  for (const row of rows) out[String(row.agent_id)] = Number(row.n);
+  return out;
 }
 
 export async function insertTrade(trade: Trade) {
