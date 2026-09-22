@@ -279,7 +279,7 @@ export function Dashboard() {
           <section className="rounded-2xl border border-down/30 bg-card p-5 text-sm">
             <h2 className="text-lg font-semibold">Live agent</h2>
             <p className="mt-1 text-muted">
-              1 sleeve ikut juara paper (ensemble) · risk TP +9% / SL −3% · max 1 posisi · alloc 25%.
+              1 sleeve ikut juara paper · full cash per entry · TP +9% / SL −3% · max 1 posisi.
             </p>
           </section>
         )}

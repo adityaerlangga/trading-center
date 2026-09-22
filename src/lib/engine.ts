@@ -823,7 +823,11 @@ export class PaperEngine {
         const series = (this.series(interval)[buy.symbol] ?? []).filter((candle) => candle.isClosed);
         const close = series.at(-1)?.close ?? 0;
         const atrVal = atr(series, 14);
-        const weight = volTargetWeight(agent.allocPct, close && atrVal ? atrVal / close : 0);
+        const atrPct = close && atrVal ? atrVal / close : 0;
+        const weight =
+          Number(params.fullSleeve ?? 0) > 0
+            ? agent.allocPct
+            : volTargetWeight(agent.allocPct, atrPct);
         const target = equity * weight;
 
         if (isPegged(buy.symbol) || agent.usdt < minTicket || target < minTicket) {

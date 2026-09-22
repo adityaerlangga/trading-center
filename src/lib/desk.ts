@@ -29,10 +29,12 @@ export type LiveAgentSpec = {
 export const LIVE_RISK_PARAMS: Record<string, number> = {
   liquid: 1,
   maxPositions: 1,
+  /** Deploy full cash on entry — do not shrink by ATR vol-target. */
+  fullSleeve: 1,
   hardStopPct: 0.03,
   takeProfitPct: 0.09,
-  maxMom: 0.025,
-  startDelay: 1,
+  maxMom: 0.04,
+  startDelay: 0,
 };
 
 /**
@@ -50,7 +52,8 @@ export const LIVE_AGENT_SPECS: LiveAgentSpec[] = [
       minVolRatio: 1.5,
       ...LIVE_RISK_PARAMS,
     },
-    allocPct: 0.25,
+    /** All-in on the single allowed position when a setup clears filters. */
+    allocPct: 1,
   },
 ];
 
