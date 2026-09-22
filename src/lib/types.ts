@@ -166,6 +166,13 @@ export type Snapshot = {
     spotUsdt: number;
     budgetUsdt: number;
     agentId: string;
+    champion?: {
+      paperId: string;
+      strategy: string;
+      interval: string;
+      score: number;
+      recentPct: number;
+    } | null;
   };
 };
 

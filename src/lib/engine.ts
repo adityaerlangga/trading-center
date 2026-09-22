@@ -652,7 +652,8 @@ export class PaperEngine {
             });
           }
           const hardStopPct = Number(params.hardStopPct ?? 0);
-          if (hardStopPct > 0 && close != null && !sells.some((row) => row.symbol === symbol)) {
+          const takeProfitPct = Number(params.takeProfitPct ?? 0);
+          if ((hardStopPct > 0 || takeProfitPct > 0) && close != null && !sells.some((row) => row.symbol === symbol)) {
             const lot = openLot(
               this.trades.filter((trade) => trade.agentId === agent.id),
               symbol,
@@ -660,10 +661,15 @@ export class PaperEngine {
             );
             if (lot.entryPrice > 0) {
               const dd = (close - lot.entryPrice) / lot.entryPrice;
-              if (dd <= -hardStopPct) {
+              if (hardStopPct > 0 && dd <= -hardStopPct) {
                 sells.push({
                   symbol,
                   reason: `${symbol}: hard stop ${(dd * 100).toFixed(2)}% ≤ -${(hardStopPct * 100).toFixed(1)}% dari entry ${lot.entryPrice.toFixed(6)}`,
+                });
+              } else if (takeProfitPct > 0 && dd >= takeProfitPct) {
+                sells.push({
+                  symbol,
+                  reason: `${symbol}: take profit ${(dd * 100).toFixed(2)}% ≥ +${(takeProfitPct * 100).toFixed(1)}% dari entry ${lot.entryPrice.toFixed(6)}`,
                 });
               }
             }
@@ -1203,7 +1209,7 @@ function periodsFrom(interval?: string) {
 }
 
 /** Positions large enough to trade. Dust below $1 does not consume a slot. */
-function materialPositions(agent: AgentRuntime, priceOf: (symbol: string) => number) {
+export function materialPositions(agent: AgentRuntime, priceOf: (symbol: string) => number) {
   let count = 0;
   for (const [asset, qty] of Object.entries(agent.holdings)) {
     if (!(qty > 0)) continue;

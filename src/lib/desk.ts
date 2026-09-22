@@ -21,14 +21,23 @@ export type LiveAgentSpec = {
   strategy: string;
   interval: string;
   params: Record<string, number>;
-  /** Fraction of that agent's sleeve per entry. Small live sleeves use 1.0 to clear min notional. */
+  /** Fraction of that agent's sleeve per entry. */
   allocPct: number;
 };
 
+/** Always layered on top of whatever paper champion we copy. */
+export const LIVE_RISK_PARAMS: Record<string, number> = {
+  liquid: 1,
+  maxPositions: 2,
+  hardStopPct: 0.05,
+  takeProfitPct: 0.06,
+  maxMom: 0.04,
+  startDelay: 0,
+};
+
 /**
- * Paper leader on 5m: tsmom_atr lookback 6, minMom 0.01.
- * Scans when each 5m candle closes.
- * 50% sleeve × max 2 names, hard stop -5%, skip chase if already up >4%.
+ * Live sleeve follows the paper-league champion (recent 24h edge).
+ * Fallback spec used until paper has a positive scorer.
  */
 export const LIVE_AGENT_SPECS: LiveAgentSpec[] = [
   {
@@ -38,15 +47,14 @@ export const LIVE_AGENT_SPECS: LiveAgentSpec[] = [
     params: {
       lookback: 6,
       minMom: 0.01,
-      maxMom: 0.04,
-      hardStopPct: 0.05,
-      liquid: 1,
-      maxPositions: 2,
-      startDelay: 1,
+      ...LIVE_RISK_PARAMS,
     },
     allocPct: 0.5,
   },
 ];
+
+/** How often live re-reads the paper champion when flat. */
+export const LIVE_ENSEMBLE_MS = 30 * 60_000;
 
 /** @deprecated use LIVE_AGENT_SPECS[0] */
 export const LIVE_AGENT_ID = LIVE_AGENT_SPECS[0].id;

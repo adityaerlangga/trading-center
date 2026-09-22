@@ -1,11 +1,19 @@
-import { PaperEngine, getPaperEngine } from "./engine";
-import { LIVE_AGENT_SPECS, liveBudgetUsdt, liveKeysConfigured } from "./desk";
+import { PaperEngine, getPaperEngine, materialPositions } from "./engine";
+import {
+  LIVE_AGENT_SPECS,
+  LIVE_ENSEMBLE_MS,
+  LIVE_RISK_PARAMS,
+  liveBudgetUsdt,
+  liveKeysConfigured,
+  type LiveAgentSpec,
+} from "./desk";
+import { pickChampion, scorePaperAgent, type ChampionPick } from "./ensemble";
 import { fetchSpotUsdtFree } from "./live/binance";
 import { executeLiveMarket } from "./live/broker";
 import { getStrategy } from "./strategies/index";
 import { takerFee } from "./market/fees";
 import { isPegged } from "./config";
-import { roundUsd } from "./paper/math";
+import { midPrice, roundUsd } from "./paper/math";
 import {
   deleteLiveAgent,
   insertLiveAgent,
@@ -20,18 +28,21 @@ import type { AgentRuntime, AppConfig, CreateAgentInput, Snapshot, Trade } from 
 export class LiveEngine extends PaperEngine {
   spotUsdt = 0;
   budgetUsdt = 0;
+  champion: ChampionPick | null = null;
   private fillLock: Promise<void> = Promise.resolve();
+  private lastEnsembleTs = 0;
 
   snapshot(): Snapshot {
     const agents = this.agents.map((agent) => this.view(agent));
     const equity: Snapshot["equity"] = {};
     for (const agent of this.agents) equity[agent.id] = (this.equity[agent.id] ?? []).slice(-80);
+    const active = this.activeSpec();
     return {
       mode: "live",
       running: this.running,
       starting: this.starting,
       startedAt: this.startedAt,
-      interval: this.config?.interval ?? LIVE_AGENT_SPECS[0].interval,
+      interval: active.interval,
       feeRate: this.fees.defaultTaker,
       feeLabel: this.fees.label,
       feed: this.feed,
@@ -47,14 +58,24 @@ export class LiveEngine extends PaperEngine {
         spotUsdt: this.spotUsdt,
         budgetUsdt: this.budgetUsdt,
         agentId: LIVE_AGENT_SPECS.map((spec) => spec.id).join(","),
+        champion: this.champion
+          ? {
+              paperId: this.champion.paperId,
+              strategy: this.champion.strategy,
+              interval: this.champion.interval,
+              score: this.champion.score,
+              recentPct: this.champion.recentPct,
+            }
+          : null,
       },
     };
   }
 
   protected loadDeskConfig(): AppConfig {
+    const active = this.activeSpec();
     return {
       mode: "live",
-      interval: LIVE_AGENT_SPECS[0].interval,
+      interval: active.interval,
       onSignal: "candle_close",
       feeRate: 0.001,
     };
@@ -65,15 +86,8 @@ export class LiveEngine extends PaperEngine {
       throw new Error("Set BINANCE_API_KEY_REAL dan BINANCE_API_SECRET_REAL dulu sebelum Start Live.");
     }
     this.spotUsdt = await fetchSpotUsdtFree();
-    this.budgetUsdt = roundUsd(Math.min(this.spotUsdt, liveBudgetUsdt()));
-    const perAgent = this.budgetUsdt / LIVE_AGENT_SPECS.length;
-    if (perAgent < 5) {
-      throw new Error(
-        `Budget per agent $${perAgent.toFixed(2)} < min notional $5. Spot USDT ${this.spotUsdt.toFixed(2)}, butuh ≥ $${(
-          5 * LIVE_AGENT_SPECS.length
-        ).toFixed(0)}.`,
-      );
-    }
+    // Sleeve for brand-new agents only; existing mirrors keep DB startingUsdt/holdings.
+    this.budgetUsdt = roundUsd(Math.min(Math.max(this.spotUsdt, 5), liveBudgetUsdt()));
   }
 
   protected async resetDeskPortfolios() {
@@ -116,32 +130,57 @@ export class LiveEngine extends PaperEngine {
     return roundUsd(this.budgetUsdt / LIVE_AGENT_SPECS.length);
   }
 
+  private activeSpec(): LiveAgentSpec {
+    const base = LIVE_AGENT_SPECS[0];
+    if (!this.champion) return base;
+    return {
+      id: base.id,
+      strategy: this.champion.strategy,
+      interval: this.champion.interval,
+      allocPct: base.allocPct,
+      params: {
+        ...this.champion.params,
+        ...LIVE_RISK_PARAMS,
+      },
+    };
+  }
+
+  private markOf = (symbol: string) => {
+    const quote = this.quotes[symbol];
+    return midPrice(quote?.bid, quote?.ask) || this.lastClose(symbol);
+  };
+
+  private isFlat(agent: AgentRuntime) {
+    return materialPositions(agent, this.markOf) === 0;
+  }
+
   protected async ensureSamples() {
     const sleeve = this.sleeveUsdt();
     const wanted = new Set(LIVE_AGENT_SPECS.map((spec) => spec.id));
     const next: AgentRuntime[] = [];
+    const spec = this.activeSpec();
+    const strategy = getStrategy(spec.strategy);
 
-    for (const spec of LIVE_AGENT_SPECS) {
-      const strategy = getStrategy(spec.strategy);
-      const existing = this.agents.find((agent) => agent.id === spec.id);
+    for (const roster of LIVE_AGENT_SPECS) {
+      const existing = this.agents.find((agent) => agent.id === roster.id);
       if (existing) {
-        const flat =
-          Object.keys(existing.holdings).length === 0 && existing.usdt >= existing.startingUsdt - 0.05;
-        // Always keep live params in sync with the roster.
+        existing.strategy = strategy.name;
         existing.params = { ...strategy.defaults, ...spec.params };
         existing.allocPct = spec.allocPct;
         existing.baseAlloc = spec.allocPct;
         existing.interval = spec.interval;
-        if (flat && Math.abs(existing.startingUsdt - sleeve) > 0.05) {
-          existing.startingUsdt = sleeve;
-          existing.usdt = sleeve;
+        if (this.isFlat(existing) && existing.usdt >= existing.startingUsdt - 0.05) {
+          if (Math.abs(existing.startingUsdt - sleeve) > 0.05 && this.spotUsdt >= sleeve) {
+            existing.startingUsdt = sleeve;
+            existing.usdt = sleeve;
+          }
         }
         await this.persistAgent(existing);
         next.push(existing);
         continue;
       }
       const agent: AgentRuntime = {
-        id: spec.id,
+        id: roster.id,
         strategy: strategy.name,
         startingUsdt: sleeve,
         allocPct: spec.allocPct,
@@ -160,7 +199,6 @@ export class LiveEngine extends PaperEngine {
       await this.persistAgent(agent);
     }
 
-    // Drop any live agent no longer in the roster (Spot wallet is shared; mirror is advisory).
     for (const agent of this.agents) {
       if (wanted.has(agent.id)) continue;
       await this.deletePersistedAgent(agent.id);
@@ -169,14 +207,93 @@ export class LiveEngine extends PaperEngine {
     }
 
     this.agents = next;
+    if (this.config) this.config.interval = spec.interval;
   }
 
   protected tickLeague() {
-    // Live desk: no tournament kill.
+    const now = Date.now();
+    if (this.champion && now - this.lastEnsembleTs < LIVE_ENSEMBLE_MS) return;
+    this.lastEnsembleTs = now;
+    void this.syncChampionFromPaper().catch((error) => {
+      console.error("live ensemble sync failed", error);
+    });
+  }
+
+  private async syncChampionFromPaper() {
+    const paper = getPaperEngine();
+    if (!paper.running && !paper.starting) {
+      void paper.start().catch((error) => console.error("paper autostart for ensemble failed", error));
+      return;
+    }
+    if (paper.starting || paper.agents.length === 0) return;
+
+    const snap = paper.snapshot();
+    const ranked: ChampionPick[] = [];
+    for (const row of snap.agents) {
+      const runtime = paper.agents.find((agent) => agent.id === row.id);
+      if (!runtime) continue;
+      const pick = scorePaperAgent({
+        agent: runtime,
+        equity: snap.equity[row.id] ?? [],
+        tradeCount: row.tradeCount,
+        sharpe: row.sharpe,
+        pnlPct: row.pnlPct,
+      });
+      if (pick) ranked.push(pick);
+    }
+
+    const winner = pickChampion(ranked);
+    if (!winner) {
+      this.note(LIVE_AGENT_SPECS[0].id, {
+        action: "wait",
+        reason: "Ensemble: belum ada juara paper 24 jam positif. Live tetap di fallback + risk guard.",
+      });
+      return;
+    }
+
+    const changed =
+      !this.champion ||
+      this.champion.paperId !== winner.paperId ||
+      this.champion.strategy !== winner.strategy ||
+      this.champion.interval !== winner.interval;
+
+    this.champion = winner;
+    const live = this.agents[0];
+    if (!live) return;
+
+    if (!changed) {
+      this.note(live.id, {
+        action: "wait",
+        reason: `Ensemble: juara tetap ${winner.paperId} (24h ${winner.recentPct.toFixed(2)}%, score ${winner.score.toFixed(2)}).`,
+      });
+      return;
+    }
+
+    if (!this.isFlat(live)) {
+      this.note(live.id, {
+        action: "wait",
+        reason: `Ensemble: juara baru ${winner.paperId}, tapi masih ada posisi. Ganti strategi setelah flat.`,
+      });
+      return;
+    }
+
+    const strategy = getStrategy(winner.strategy);
+    live.strategy = strategy.name;
+    live.interval = winner.interval;
+    live.params = { ...strategy.defaults, ...winner.params, ...LIVE_RISK_PARAMS };
+    live.allocPct = LIVE_AGENT_SPECS[0].allocPct;
+    live.baseAlloc = live.allocPct;
+    if (this.config) this.config.interval = winner.interval;
+    await this.persistAgent(live);
+    this.note(live.id, {
+      action: "wait",
+      reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: TP +6% / SL -5% / no-chase.`,
+    });
+    void this.persist();
   }
 
   async createAgent(_input: CreateAgentInput): Promise<never> {
-    throw new Error(`Live desk menjalankan ${LIVE_AGENT_SPECS.length} agent tetap.`);
+    throw new Error(`Live desk menjalankan ${LIVE_AGENT_SPECS.length} agent ensemble.`);
   }
 
   async removeAgent(_id: string): Promise<never> {
