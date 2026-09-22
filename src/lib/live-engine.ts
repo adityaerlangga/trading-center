@@ -370,7 +370,8 @@ export class LiveEngine extends PaperEngine {
         continue;
       }
       // Unsellable leftover (LOT_SIZE / min notional) — drop from mirror so it cannot block full-sleeve entries.
-      if (live.lastError?.includes("LOT_SIZE") || value < 10) {
+      const errMsg = String(live.lastError ?? "");
+      if (errMsg.includes("LOT_SIZE") || value < 10) {
         delete live.holdings[asset];
         writtenOff.push(symbol);
       } else {
