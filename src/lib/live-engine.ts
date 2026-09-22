@@ -405,11 +405,14 @@ export class LiveEngine extends PaperEngine {
       return true;
     } catch (error) {
       agent.lastError = error instanceof Error ? error.message : String(error);
-      this.note(agent.id, {
-        action: "skip",
-        symbol,
-        reason: `Live order gagal: ${agent.lastError}`,
-      });
+      // Dust leftovers that fail Binance LOT_SIZE are noise — keep trying silently off the thought feed.
+      if (!agent.lastError.includes("LOT_SIZE")) {
+        this.note(agent.id, {
+          action: "skip",
+          symbol,
+          reason: `Live order gagal: ${agent.lastError}`,
+        });
+      }
       return false;
     }
   }

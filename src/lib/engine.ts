@@ -763,15 +763,21 @@ export class PaperEngine {
       }
 
       const maxPositions = Number(params.maxPositions ?? 0);
+      const materialSells = sells.filter((sell) => {
+        const qty = holdingQty(agent, sell.symbol);
+        const value = this.markPrice(sell.symbol) * qty;
+        return value >= 1;
+      });
       this.note(agent.id, {
         action: "scan",
-        reason: `Scan ${scanned} pair. Watchlist beli ${buys.length}, sinyal jual ${sells.length}. ${
+        reason: `Scan ${scanned} pair. Watchlist beli ${buys.length}, sinyal jual ${materialSells.length}. ${
           maxPositions > 0 ? `Maks ${maxPositions} posisi` : "Posisi tidak dibatasi"
         }; entry hanya yang lolos filter.`,
       });
 
-      for (const sell of sells) {
+      for (const sell of materialSells) {
         const filled = await this.fill(agent, sell.symbol, "SELL", 1);
+        if (!filled && agent.lastError?.includes("LOT_SIZE")) continue;
         this.note(agent.id, {
           action: filled ? "sell" : "skip",
           symbol: sell.symbol,
@@ -785,7 +791,7 @@ export class PaperEngine {
       thought.topBuys = qualified.slice(0, 8);
       thought.scanned = scanned;
       thought.buySignals = qualified.length;
-      thought.sellSignals = sells.length;
+      thought.sellSignals = materialSells.length;
       thought.lastScanAt = Date.now();
       thought.nextCandleAt = this.nextCandleAt(interval);
       thought.status = "waiting";
@@ -1171,7 +1177,12 @@ export class PaperEngine {
     } else if (thought.lastScanAt && Date.now() - thought.lastScanAt < 1500) {
       thought.status = "scanning";
     }
-    return thought;
+    const notes = thought.notes.filter((row) => !isNoiseThought(row.reason));
+    const summary =
+      thought.summary && isNoiseThought(thought.summary)
+        ? notes[0]?.reason ?? thought.summary
+        : thought.summary;
+    return { ...thought, notes, summary };
   }
 
   protected note(id: string, thought: Omit<Thought, "ts">) {
@@ -1422,6 +1433,10 @@ export function materialPositions(agent: AgentRuntime, priceOf: (symbol: string)
     if (price > 0 && price * qty >= 1) count += 1;
   }
   return count;
+}
+
+function isNoiseThought(reason: string) {
+  return /LOT_SIZE|tidak lolos LOT_SIZE/i.test(reason);
 }
 
 function riskLimits(agent: AgentRuntime) {
