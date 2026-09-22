@@ -5,8 +5,9 @@ export type SpeedSample = {
   params: Record<string, number>;
 };
 
-const INTERVALS = ["1m", "3m", "5m", "15m"];
-const START_DELAYS = [0, 1, 2, 4, 8, 16];
+/** Keep the paper league small enough that the web desk stays responsive. */
+const INTERVALS = ["5m", "15m"];
+const START_DELAYS = [0, 4];
 
 const SHORT: Record<string, string> = {
   tsmom_atr: "tsmom",
@@ -32,62 +33,45 @@ function variants(): Variant[] {
     rows.push({ strategy, tag, params });
   };
 
-  for (const lookback of [6, 12, 18, 24, 36, 48]) {
-    for (const minMom of [0.002, 0.005, 0.01]) {
+  for (const lookback of [12, 24, 48]) {
+    for (const minMom of [0.005, 0.01]) {
       add("tsmom_atr", `lb${lookback}_m${Math.round(minMom * 1000)}`, { lookback, minMom });
     }
   }
   for (const [fast, slow] of [
-    [3, 8],
     [5, 13],
     [8, 21],
-    [10, 30],
     [12, 26],
-    [20, 50],
   ] as const) {
     add("sma_crossover", `${fast}_${slow}`, { fast, slow });
     add("ema_cross", `${fast}_${slow}`, { fast, slow });
     add("pullback", `${fast}_${slow}`, { fast, slow });
   }
-  for (const oversold of [15, 20, 25, 30, 35, 40]) {
-    for (const exitRsi of [50, 65]) {
-      add("rsi_mean_reversion", `os${oversold}_x${exitRsi}`, { oversold, exitRsi });
-    }
+  for (const oversold of [20, 30, 35]) {
+    add("rsi_mean_reversion", `os${oversold}_x55`, { oversold, exitRsi: 55 });
   }
-  for (const lookback of [8, 12, 24, 48]) {
-    for (const topDecile of [0.05, 0.1, 0.2]) {
-      add("xs_momentum", `lb${lookback}_d${Math.round(topDecile * 100)}`, { lookback, topDecile });
-    }
+  for (const lookback of [12, 24]) {
+    add("xs_momentum", `lb${lookback}_d10`, { lookback, topDecile: 0.1 });
+    add("dual_momentum", `lb${lookback}_m6`, { lookback, minMom: 0.006 });
   }
-  for (const lookback of [8, 12, 24, 48]) {
-    for (const minMom of [0.002, 0.006, 0.012]) {
-      add("dual_momentum", `lb${lookback}_m${Math.round(minMom * 1000)}`, { lookback, minMom });
-    }
-  }
-  for (const entry of [8, 12, 20, 30, 40, 55]) {
+  for (const entry of [12, 20, 40]) {
     add("donchian", `e${entry}`, { entry, exit: Math.max(3, Math.floor(entry / 2)) });
   }
-  for (const period of [10, 14, 20, 30]) {
-    for (const mult of [1.5, 2, 2.5]) {
-      add("bollinger_revert", `p${period}_m${Math.round(mult * 10)}`, { period, mult });
-    }
+  for (const period of [14, 20]) {
+    add("bollinger_revert", `p${period}_m20`, { period, mult: 2 });
   }
-  for (const rsiMax of [3, 5, 10, 15]) {
-    for (const trend of [20, 50]) {
-      add("connors_rsi2", `r${rsiMax}_t${trend}`, { rsiMax, exitRsi: 65, trend });
-    }
+  for (const rsiMax of [5, 10]) {
+    add("connors_rsi2", `r${rsiMax}_t50`, { rsiMax, exitRsi: 65, trend: 50 });
   }
-  for (const atrPeriod of [7, 10, 14]) {
-    for (const atrMult of [2, 3]) {
-      add("supertrend", `a${atrPeriod}_m${atrMult * 10}`, { atrPeriod, atrMult });
-    }
+  for (const atrPeriod of [10, 14]) {
+    add("supertrend", `a${atrPeriod}_m30`, { atrPeriod, atrMult: 3 });
   }
   for (const entry of [10, 20, 40]) {
     for (const volMult of [1.5, 2.2]) {
       add("volume_breakout", `e${entry}_v${Math.round(volMult * 10)}`, { entry, volMult });
     }
   }
-  for (const lookback of [10, 14, 20, 30]) {
+  for (const lookback of [14, 20]) {
     add("range_fade", `lb${lookback}`, { lookback });
   }
   return rows;

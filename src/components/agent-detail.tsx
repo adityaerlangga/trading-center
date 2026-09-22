@@ -19,7 +19,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
-      const res = await fetch(`/api/agents/${id}?env=${env}`, { cache: "no-store" });
+      const res = await fetch(`/api/agents/${id}?env=${env}`, { cache: "no-store", credentials: "include" });
       if (!res.ok) {
         if (!cancelled) setError("Agent not found");
         return;
@@ -44,6 +44,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
       const res = await fetch(`/api/agents/${id}?env=${env}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ startingUsdt, env }),
       });
       const data = (await res.json()) as Detail & { error?: string };
@@ -58,7 +59,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
 
   async function remove() {
     if (!confirm(`Hapus agent ${id}?`)) return;
-    const res = await fetch(`/api/agents/${id}?env=${env}`, { method: "DELETE" });
+    const res = await fetch(`/api/agents/${id}?env=${env}`, { method: "DELETE", credentials: "include" });
     if (!res.ok) {
       const data = (await res.json()) as { error?: string };
       alert(data.error ?? "Gagal hapus agent");

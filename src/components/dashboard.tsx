@@ -55,10 +55,18 @@ export function Dashboard() {
     let cancelled = false;
     const pull = async () => {
       try {
-        const res = await fetch(`/api/snapshot?env=${desk}`, { cache: "no-store" });
-        if (!res.ok) return;
+        const res = await fetch(`/api/snapshot?env=${desk}`, { cache: "no-store", credentials: "include" });
+        if (!res.ok) {
+          if (!cancelled && res.status === 401) {
+            setActionError("Auth gagal — refresh halaman dan login Basic Auth lagi.");
+          }
+          return;
+        }
         const data = (await res.json()) as Snapshot;
-        if (!cancelled) setSnap(data);
+        if (!cancelled) {
+          setActionError("");
+          setSnap(data);
+        }
       } catch {
         // keep last snapshot
       }
@@ -73,7 +81,7 @@ export function Dashboard() {
 
   useEffect(() => {
     if (desk !== "paper") return;
-    void fetch(`/api/agents?env=paper`)
+    void fetch(`/api/agents?env=paper`, { credentials: "include" })
       .then((res) => res.json())
       .then((data: { strategies?: StrategyOption[] }) => {
         if (data.strategies) setStrategies(data.strategies);
@@ -263,7 +271,10 @@ function AgentCard({
     if (!confirm(`Hapus agent ${agent.id}?`)) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/agents/${agent.id}?env=${desk}`, { method: "DELETE" });
+      const res = await fetch(`/api/agents/${agent.id}?env=${desk}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
         throw new Error(data.error ?? "Gagal hapus agent");
@@ -602,7 +613,7 @@ function LabPanel() {
   const [busy, setBusy] = useState("");
 
   useEffect(() => {
-    void fetch("/api/research", { cache: "no-store" })
+    void fetch("/api/research", { cache: "no-store", credentials: "include" })
       .then((res) => res.json())
       .then((data: { experiments?: LabReport[] }) => setRows(data.experiments ?? []))
       .catch(() => undefined);
@@ -616,6 +627,7 @@ function LabPanel() {
       const res = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ experimentId: id, startingUsdt }),
       });
       const data = (await res.json()) as { error?: string };
@@ -688,6 +700,7 @@ function CreateAgentForm({
       const res = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           name,
           strategy,
@@ -886,6 +899,7 @@ async function runAction(
     const res = await fetch("/api/engine", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ action, env }),
     });
     const data = (await res.json()) as Snapshot & { error?: string };

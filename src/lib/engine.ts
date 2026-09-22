@@ -8,6 +8,7 @@ import { executeMarket, holdingQty } from "./paper/broker";
 import { midPrice, roundUsd } from "./paper/math";
 import {
   deleteAgent as deleteAgentRow,
+  deleteAgentsBulk,
   insertAgent,
   insertAgents,
   insertTrade,
@@ -44,6 +45,7 @@ export const MAX_TRADES = 20_000;
 const MAX_EQUITY = 400;
 const SNAPSHOT_CACHE_MS = 2_500;
 const LEAGUE_UI_LIMIT = 40;
+const SCAN_CONCURRENCY = 8;
 
 const SEED_AGENTS: AgentRuntime[] = [
   {
@@ -108,6 +110,8 @@ export class PaperEngine {
   private sharpeCache = new Map<string, { len: number; value: number }>();
   private snapshotCache: Snapshot | null = null;
   private snapshotCacheAt = 0;
+  private scanInflight = 0;
+  private scanWaiters: Array<() => void> = [];
   protected thoughts = new Map<string, AgentThought>();
 
   snapshot(): Snapshot {
@@ -428,9 +432,28 @@ export class PaperEngine {
   }
 
   protected async ensureSamples() {
+    const roster = sampleRoster();
+    const wanted = new Set(roster.map((spec) => spec.id));
+    const obsolete = this.agents.filter((agent) => agent.id.startsWith("spd_") && !wanted.has(agent.id));
+    if (obsolete.length > 0) {
+      const obsoleteIds = new Set(obsolete.map((agent) => agent.id));
+      this.agents = this.agents.filter((agent) => !obsoleteIds.has(agent.id));
+      for (const agent of obsolete) {
+        delete this.equity[agent.id];
+        this.thoughts.delete(agent.id);
+        this.tradesByAgent.delete(agent.id);
+        this.sharpeCache.delete(agent.id);
+      }
+      this.trades = this.trades.filter((trade) => !obsoleteIds.has(trade.agentId));
+      this.rebuildTradeIndex();
+      this.snapshotCache = null;
+      await deleteAgentsBulk([...obsoleteIds]);
+      console.log(`pruned ${obsolete.length} oversized sample agents`);
+    }
+
     const existing = new Set(this.agents.map((agent) => agent.id));
     const fresh: AgentRuntime[] = [];
-    for (const spec of sampleRoster()) {
+    for (const spec of roster) {
       if (existing.has(spec.id)) continue;
       const strategy = getStrategy(spec.strategy);
       const agent: AgentRuntime = {
@@ -473,7 +496,8 @@ export class PaperEngine {
     }
     this.candles = this.books[this.config.interval] ?? {};
     this.feed = { ...this.feed, warmupDone: jobs, warmupTotal: jobs };
-    this.scanAll();
+    // Do not scanAll() here — that used to stampede thousands of agents and freeze the desk.
+    this.maybeBackfillScan();
     this.recordEquity(true);
   }
 
@@ -627,7 +651,36 @@ export class PaperEngine {
     }
   }
 
+  private acquireScanSlot() {
+    if (this.scanInflight < SCAN_CONCURRENCY) {
+      this.scanInflight += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.scanWaiters.push(() => {
+        this.scanInflight += 1;
+        resolve();
+      });
+    });
+  }
+
+  private releaseScanSlot() {
+    this.scanInflight = Math.max(0, this.scanInflight - 1);
+    const next = this.scanWaiters.shift();
+    if (next) next();
+  }
+
   protected async scanOne(agent: AgentRuntime, symbols: string[]) {
+    if (!this.config) return;
+    await this.acquireScanSlot();
+    try {
+      await this.scanOneUnlocked(agent, symbols);
+    } finally {
+      this.releaseScanSlot();
+    }
+  }
+
+  private async scanOneUnlocked(agent: AgentRuntime, symbols: string[]) {
     if (!this.config) return;
     try {
       const strategy = getStrategy(agent.strategy);
@@ -1133,7 +1186,7 @@ export class PaperEngine {
   private maybeBackfillScan() {
     if (!this.running || this.starting) return;
     if (this.feed.warmupDone < this.feed.warmupTotal || this.universe.length === 0) return;
-    let budget = 40;
+    let budget = 8;
     for (const agent of this.agents) {
       if (budget <= 0) break;
       if (agent.status === "killed") continue;

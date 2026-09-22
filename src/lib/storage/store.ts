@@ -197,6 +197,20 @@ export async function deleteAgent(id: string) {
   await db.query("DELETE FROM agents WHERE id = ?", [id]);
 }
 
+/** Drop many sample agents in one shot (prune oversized paper league). */
+export async function deleteAgentsBulk(ids: string[]) {
+  if (ids.length === 0) return;
+  await readyDb();
+  const db = getPool();
+  for (let i = 0; i < ids.length; i += 200) {
+    const slice = ids.slice(i, i + 200);
+    const ph = slice.map(() => "?").join(",");
+    await db.query(`DELETE FROM equity_points WHERE agent_id IN (${ph})`, slice);
+    await db.query(`DELETE FROM trades WHERE agent_id IN (${ph})`, slice);
+    await db.query(`DELETE FROM agents WHERE id IN (${ph})`, slice);
+  }
+}
+
 export async function loadAgentTrades(agentId: string): Promise<Trade[]> {
   await readyDb();
   const [rows] = await getPool().query<TradeRow[]>(
