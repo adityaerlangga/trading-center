@@ -476,7 +476,7 @@ function League({
         <div className="mb-4 rounded-xl border border-line bg-background px-4 py-3">
           <p className="text-xs text-muted">Pemimpin uang bersih</p>
           <p className="mt-1 text-lg font-semibold">
-            <Link href={`/agents/${rows[0].id}`}>{rows[0].id}</Link>
+            <Link href={`/agents/${rows[0].id}?env=paper`}>{rows[0].id}</Link>
           </p>
           <p className={`font-mono text-2xl ${rows[0].soldPnl > 0 ? "text-up" : rows[0].soldPnl < 0 ? "text-down" : ""}`}>
             {rows[0].soldReady ? fmtSignedUsd(rows[0].soldPnl) : "Menunggu bid"}
@@ -545,7 +545,7 @@ function League({
                 <tr key={row.id} className="border-t border-line">
                   <td className="py-2">{row.rank}</td>
                   <td>
-                    <Link href={`/agents/${row.id}`}>{row.id}</Link>
+                    <Link href={`/agents/${row.id}?env=paper`}>{row.id}</Link>
                   </td>
                   <td>{row.interval}</td>
                   <td>{row.strategy}</td>

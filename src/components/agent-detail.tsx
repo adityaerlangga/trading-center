@@ -9,19 +9,12 @@ import type { AgentThought, AgentView, EquityPoint, Trade } from "@/lib/types";
 
 type Detail = AgentView & { trades: Trade[]; equitySeries: EquityPoint[] };
 
-export function AgentDetail({ id }: { id: string }) {
+export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) {
   const router = useRouter();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState("");
   const [startingUsdt, setStartingUsdt] = useState("");
   const [saving, setSaving] = useState(false);
-  const [env, setEnv] = useState<"paper" | "live">("paper");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const q = new URLSearchParams(window.location.search).get("env");
-    setEnv(q === "live" || id.startsWith("live_") ? "live" : "paper");
-  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,14 +64,14 @@ export function AgentDetail({ id }: { id: string }) {
       alert(data.error ?? "Gagal hapus agent");
       return;
     }
-    router.push("/");
+    router.push(`/?env=${env}`);
   }
 
   if (error) {
     return (
       <main className="mx-auto max-w-5xl px-5 py-10">
         <p className="text-down">{error}</p>
-        <Link href="/" className="mt-4 inline-block text-sm text-muted">
+        <Link href={`/?env=${env}`} className="mt-4 inline-block text-sm text-muted">
           Back
         </Link>
       </main>
@@ -98,12 +91,12 @@ export function AgentDetail({ id }: { id: string }) {
     <main className="mx-auto grid max-w-5xl gap-5 px-5 py-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href="/" className="font-mono text-xs text-muted">
+          <Link href={`/?env=${env}`} className="font-mono text-xs text-muted">
             ← desk
           </Link>
           <h1 className="text-2xl font-semibold">{detail.id}</h1>
           <p className="font-mono text-sm text-muted">
-            {detail.strategy} · {detail.interval} · alloc {(detail.allocPct * 100).toFixed(0)}% / coin · start{" "}
+            {env} · {detail.strategy} · {detail.interval} · alloc {(detail.allocPct * 100).toFixed(0)}% / coin · start{" "}
             {fmtUsd(detail.startingUsdt)}
           </p>
         </div>
