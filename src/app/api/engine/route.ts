@@ -1,4 +1,5 @@
 import { deskFromRequest, getDeskEngine } from "@/lib/desk-runtime";
+import { getLiveEngine } from "@/lib/live-engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +13,13 @@ export async function POST(request: Request) {
     if (body.action === "start") await engine.start();
     else if (body.action === "stop") await engine.stop();
     else if (body.action === "reset") await engine.reset();
-    else return Response.json({ error: "Unknown action" }, { status: 400 });
+    else if (body.action === "flatten") {
+      if (env !== "live") {
+        return Response.json({ error: "Flatten hanya untuk live desk." }, { status: 400 });
+      }
+      const result = await getLiveEngine().flattenPositions();
+      return Response.json({ ...getLiveEngine().snapshot(), flatten: result });
+    } else return Response.json({ error: "Unknown action" }, { status: 400 });
     return Response.json(engine.snapshot());
   } catch (error) {
     return Response.json(

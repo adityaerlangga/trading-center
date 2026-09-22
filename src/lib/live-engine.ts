@@ -12,7 +12,7 @@ import { fetchSpotUsdtFree } from "./live/binance";
 import { executeLiveMarket } from "./live/broker";
 import { getStrategy } from "./strategies/index";
 import { takerFee } from "./market/fees";
-import { isPegged } from "./config";
+import { isPegged, toSymbol } from "./config";
 import { midPrice, roundUsd } from "./paper/math";
 import { countTradesByAgent } from "./storage/store";
 import {
@@ -342,6 +342,40 @@ export class LiveEngine extends PaperEngine {
 
   async removeAgent(_id: string): Promise<never> {
     throw new Error("Agent Live tidak boleh dihapus dari UI. Stop desk saja.");
+  }
+
+  /** Market-sell every material position so the next entry can use full cash. */
+  async flattenPositions() {
+    const live = this.agents[0];
+    if (!live) return { sold: [] as string[], skipped: [] as string[], usdt: 0 };
+    if (!this.running) await this.start();
+
+    const sold: string[] = [];
+    const skipped: string[] = [];
+    for (const [asset, qty] of Object.entries({ ...live.holdings })) {
+      if (!(qty > 0)) continue;
+      const symbol = toSymbol(asset);
+      const mark = this.markOf(symbol);
+      if (!(mark > 0) || mark * qty < 1) {
+        skipped.push(symbol);
+        continue;
+      }
+      const ok = await this.fill(live, symbol, "SELL", 1);
+      if (ok) sold.push(symbol);
+      else skipped.push(symbol);
+    }
+
+    this.spotUsdt = await fetchSpotUsdtFree().catch(() => this.spotUsdt);
+    this.note(live.id, {
+      action: "sell",
+      reason:
+        sold.length > 0
+          ? `Flatten: jual ${sold.join(", ")} — cash siap full sleeve (${live.usdt.toFixed(2)} USDT mirror).`
+          : `Flatten: tidak ada posisi material yang berhasil dijual.`,
+    });
+    await this.persistAgent(live);
+    void this.persist();
+    return { sold, skipped, usdt: live.usdt, spotUsdt: this.spotUsdt };
   }
 
   protected async fill(agent: AgentRuntime, symbol: string, side: "BUY" | "SELL", sizePct: number) {
