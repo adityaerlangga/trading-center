@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { agentNett, NettBadge } from "@/components/nett-badge";
+import { clearDeskAuth, deskFetch, getDeskAuthHeader, setDeskAuth } from "@/lib/desk-auth";
 import type { AgentView, MethodStats, Snapshot, Trade } from "@/lib/types";
 
 const empty: Snapshot = {
@@ -33,7 +34,80 @@ function loadDeskTab(): DeskTab {
   return window.localStorage.getItem("deskEnv_v2") === "paper" ? "paper" : "live";
 }
 
+function AuthGate({ onReady }: { onReady: () => void }) {
+  const [user, setUser] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    setError("");
+    try {
+      setDeskAuth(user.trim(), password);
+      const res = await deskFetch("/api/health");
+      // health is public — probe snapshot instead
+      const probe = await deskFetch("/api/snapshot?env=live");
+      if (probe.status === 401) {
+        clearDeskAuth();
+        throw new Error("Email/password salah");
+      }
+      if (!probe.ok) throw new Error(`Login gagal (${probe.status})`);
+      onReady();
+    } catch (err) {
+      clearDeskAuth();
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-5">
+      <form
+        className="w-full max-w-sm rounded-2xl border border-line bg-card p-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <p className="font-mono text-[11px] tracking-[0.22em] text-accent uppercase">Trading Center</p>
+        <h1 className="mt-2 text-xl font-semibold">Login desk</h1>
+        <p className="mt-1 text-sm text-muted">Masuk supaya API snapshot tidak stuck Idle.</p>
+        <label className="mt-5 block text-xs text-muted">
+          Email
+          <input
+            className="mt-1 w-full rounded-xl border border-line bg-background px-3 py-2 text-sm"
+            value={user}
+            onChange={(event) => setUser(event.target.value)}
+            autoComplete="username"
+          />
+        </label>
+        <label className="mt-3 block text-xs text-muted">
+          Password
+          <input
+            className="mt-1 w-full rounded-xl border border-line bg-background px-3 py-2 text-sm"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+          />
+        </label>
+        {error ? <p className="mt-3 text-sm text-down">{error}</p> : null}
+        <button
+          type="submit"
+          disabled={busy || !user || !password}
+          className="mt-5 w-full rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
+        >
+          {busy ? "Masuk…" : "Masuk"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export function Dashboard() {
+  const [authed, setAuthed] = useState(false);
   const [desk, setDesk] = useState<DeskTab>("live");
   const [snap, setSnap] = useState<Snapshot>(empty);
   const [busy, setBusy] = useState(false);
@@ -42,6 +116,7 @@ export function Dashboard() {
   const [actionError, setActionError] = useState("");
 
   useEffect(() => {
+    setAuthed(Boolean(getDeskAuthHeader()));
     setDesk(loadDeskTab());
   }, []);
 
@@ -52,13 +127,15 @@ export function Dashboard() {
   }, [desk]);
 
   useEffect(() => {
+    if (!authed) return;
     let cancelled = false;
     const pull = async () => {
       try {
-        const res = await fetch(`/api/snapshot?env=${desk}`, { cache: "no-store", credentials: "include" });
+        const res = await deskFetch(`/api/snapshot?env=${desk}`);
         if (!res.ok) {
           if (!cancelled && res.status === 401) {
-            setActionError("Auth gagal — refresh halaman dan login Basic Auth lagi.");
+            setAuthed(false);
+            setActionError("Sesi auth habis — login lagi.");
           }
           return;
         }
@@ -77,19 +154,23 @@ export function Dashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [desk]);
+  }, [desk, authed]);
 
   useEffect(() => {
-    if (desk !== "paper") return;
-    void fetch(`/api/agents?env=paper`, { credentials: "include" })
+    if (!authed || desk !== "paper") return;
+    void deskFetch(`/api/agents?env=paper`)
       .then((res) => res.json())
       .then((data: { strategies?: StrategyOption[] }) => {
         if (data.strategies) setStrategies(data.strategies);
       })
       .catch(() => undefined);
-  }, [desk]);
+  }, [desk, authed]);
 
   const isLive = desk === "live";
+
+  if (!authed) {
+    return <AuthGate onReady={() => setAuthed(true)} />;
+  }
 
   return (
     <div className="min-h-screen">
@@ -271,9 +352,8 @@ function AgentCard({
     if (!confirm(`Hapus agent ${agent.id}?`)) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/agents/${agent.id}?env=${desk}`, {
+      const res = await deskFetch(`/api/agents/${agent.id}?env=${desk}`, {
         method: "DELETE",
-        credentials: "include",
       });
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
@@ -613,7 +693,7 @@ function LabPanel() {
   const [busy, setBusy] = useState("");
 
   useEffect(() => {
-    void fetch("/api/research", { cache: "no-store", credentials: "include" })
+    void deskFetch("/api/research")
       .then((res) => res.json())
       .then((data: { experiments?: LabReport[] }) => setRows(data.experiments ?? []))
       .catch(() => undefined);
@@ -624,10 +704,9 @@ function LabPanel() {
     if (!startingUsdt) return;
     setBusy(id);
     try {
-      const res = await fetch("/api/research", {
+      const res = await deskFetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ experimentId: id, startingUsdt }),
       });
       const data = (await res.json()) as { error?: string };
@@ -697,10 +776,9 @@ function CreateAgentForm({
     setSaving(true);
     setError("");
     try {
-      const res = await fetch("/api/agents", {
+      const res = await deskFetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           name,
           strategy,
@@ -896,10 +974,9 @@ async function runAction(
   setBusy(true);
   setError("");
   try {
-    const res = await fetch("/api/engine", {
+    const res = await deskFetch("/api/engine", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify({ action, env }),
     });
     const data = (await res.json()) as Snapshot & { error?: string };

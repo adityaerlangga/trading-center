@@ -12,9 +12,10 @@ function unauthorized() {
 }
 
 export function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname === "/api/health") {
-    return NextResponse.next();
-  }
+  const path = request.nextUrl.pathname;
+  // Public shell + health. API data still requires Basic Auth (via desk login form).
+  if (path === "/api/health") return NextResponse.next();
+  if (!path.startsWith("/api/")) return NextResponse.next();
 
   const user = process.env.DESK_AUTH_USER?.trim();
   const password = process.env.DESK_AUTH_PASSWORD ?? "";

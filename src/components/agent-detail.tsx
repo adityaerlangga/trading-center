@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { fmtPct, fmtPrice, fmtSignedUsd, fmtTime, fmtUsd } from "@/components/dashboard";
 import { agentNett } from "@/components/nett-badge";
+import { deskFetch } from "@/lib/desk-auth";
 import type { AgentThought, AgentView, EquityPoint, Trade } from "@/lib/types";
 
 type Detail = AgentView & { trades: Trade[]; equitySeries: EquityPoint[] };
@@ -19,7 +20,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
-      const res = await fetch(`/api/agents/${id}?env=${env}`, { cache: "no-store", credentials: "include" });
+      const res = await deskFetch(`/api/agents/${id}?env=${env}`);
       if (!res.ok) {
         if (!cancelled) setError("Agent not found");
         return;
@@ -41,10 +42,9 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
   async function saveBalance() {
     setSaving(true);
     try {
-      const res = await fetch(`/api/agents/${id}?env=${env}`, {
+      const res = await deskFetch(`/api/agents/${id}?env=${env}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ startingUsdt, env }),
       });
       const data = (await res.json()) as Detail & { error?: string };
@@ -59,7 +59,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
 
   async function remove() {
     if (!confirm(`Hapus agent ${id}?`)) return;
-    const res = await fetch(`/api/agents/${id}?env=${env}`, { method: "DELETE", credentials: "include" });
+    const res = await deskFetch(`/api/agents/${id}?env=${env}`, { method: "DELETE" });
     if (!res.ok) {
       const data = (await res.json()) as { error?: string };
       alert(data.error ?? "Gagal hapus agent");
