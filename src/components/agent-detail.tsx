@@ -31,7 +31,7 @@ export function AgentDetail({ id, env }: { id: string; env: "paper" | "live" }) 
       }
     };
     void pull();
-    const timer = setInterval(pull, 1500);
+    const timer = setInterval(pull, 4_000);
     return () => {
       cancelled = true;
       clearInterval(timer);

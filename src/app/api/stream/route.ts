@@ -26,7 +26,7 @@ export async function GET(request: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(engine.snapshot())}\n\n`));
       };
       send();
-      const timer = setInterval(send, 1000);
+      const timer = setInterval(send, 5_000);
       const stop = () => {
         clearInterval(timer);
         try {

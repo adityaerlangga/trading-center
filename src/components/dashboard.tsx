@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { agentNett, NettBadge } from "@/components/nett-badge";
-import type { AgentView, Snapshot, Trade } from "@/lib/types";
+import type { AgentView, MethodStats, Snapshot, Trade } from "@/lib/types";
 
 const empty: Snapshot = {
   mode: "paper",
@@ -19,6 +19,8 @@ const empty: Snapshot = {
   trades: [],
   equity: {},
   league: [],
+  leagueTotal: 0,
+  methods: [],
   btcReturnPct: 0,
   regime: "chop",
 };
@@ -62,7 +64,7 @@ export function Dashboard() {
       }
     };
     void pull();
-    const timer = setInterval(pull, 1000);
+    const timer = setInterval(pull, desk === "paper" ? 8_000 : 5_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -175,15 +177,20 @@ export function Dashboard() {
       <main className="mx-auto grid max-w-7xl gap-5 px-5 py-5">
         {!isLive ? (
           <>
-            <League rows={snap.league ?? []} btcReturnPct={snap.btcReturnPct ?? 0} regime={snap.regime ?? "chop"} />
+            <League
+              rows={snap.league ?? []}
+              methods={snap.methods}
+              leagueTotal={snap.leagueTotal ?? snap.league?.length ?? 0}
+              btcReturnPct={snap.btcReturnPct ?? 0}
+              regime={snap.regime ?? "chop"}
+            />
             <LabPanel />
           </>
         ) : (
           <section className="rounded-2xl border border-down/30 bg-card p-5 text-sm">
             <h2 className="text-lg font-semibold">Live agent</h2>
             <p className="mt-1 text-muted">
-              1× <span className="font-mono">tsmom_atr</span> 5m lb6 minMom 0.01 (top paper 5m saat ini) · full Spot sleeve ·
-              alloc 100%.
+              1 sleeve ikut juara paper (ensemble) · risk TP +9% / SL −3% · max 1 posisi · alloc 25%.
             </p>
           </section>
         )}
@@ -403,9 +410,17 @@ function methodBoard(rows: Snapshot["league"]) {
     .sort((a, b) => b.median - a.median);
 }
 
-function MethodBoard({ rows }: { rows: Snapshot["league"] }) {
-  const methods = methodBoard(rows);
-  if (methods.length === 0) return null;
+function MethodBoard({ rows, methods }: { rows: Snapshot["league"]; methods?: MethodStats[] }) {
+  const computed = useMemo(() => {
+    if (methods && methods.length > 0) {
+      return methods.map((method) => ({
+        key: `${method.interval}-${method.strategy}`,
+        ...method,
+      }));
+    }
+    return methodBoard(rows);
+  }, [methods, rows]);
+  if (computed.length === 0) return null;
   return (
     <div className="mb-4 max-h-96 overflow-auto">
       <p className="mb-2 text-xs text-muted">Metode, median uang bersih dari semua salinan $100</p>
@@ -422,7 +437,7 @@ function MethodBoard({ rows }: { rows: Snapshot["league"] }) {
           </tr>
         </thead>
         <tbody>
-          {methods.map((method, index) => (
+          {computed.map((method, index) => (
             <tr key={method.key} className="border-t border-line">
               <td className="py-2">{index + 1}</td>
               <td>{method.interval}</td>
@@ -447,16 +462,20 @@ function MethodBoard({ rows }: { rows: Snapshot["league"] }) {
 
 function League({
   rows,
+  methods,
+  leagueTotal,
   btcReturnPct,
   regime,
 }: {
   rows: Snapshot["league"];
+  methods?: MethodStats[];
+  leagueTotal: number;
   btcReturnPct: number;
   regime: Snapshot["regime"];
 }) {
   const [posisiFilter, setPosisiFilter] = useState<"all" | "hold" | "flat">("all");
   const holding = rows.filter((row) => row.positionCount > 0).length;
-  const flat = rows.length - holding;
+  const flat = Math.max(0, leagueTotal - holding);
   const filtered =
     posisiFilter === "hold"
       ? rows.filter((row) => row.positionCount > 0)
@@ -469,7 +488,7 @@ function League({
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <h2 className="text-lg font-semibold">Liga</h2>
         <p className="font-mono text-xs text-muted">
-          {rows.length} sampel · hold {holding} · flat {flat} · BTC {fmtPct(btcReturnPct)} · {regime === "chop" ? "chop" : "trend"}
+          {leagueTotal} sampel · hold {holding}+ · flat ~{flat} · BTC {fmtPct(btcReturnPct)} · {regime === "chop" ? "chop" : "trend"}
         </p>
       </div>
       {rows[0] ? (
@@ -485,11 +504,11 @@ function League({
             {rows[0].strategy} · {rows[0].interval}
             {rows[0].soldReady ? ` · ${fmtPct(rows[0].soldPct)}` : ""} ·{" "}
             {rows[0].positionCount > 0 ? `hold ${rows[0].positionCount} koin` : "flat"} ·{" "}
-            {rows.filter((row) => row.soldReady && row.soldPnl > 0).length} agent uang bersih di atas nol
+            {rows.filter((row) => row.soldReady && row.soldPnl > 0).length} agent uang bersih di atas nol (top slice)
           </p>
         </div>
       ) : null}
-      <MethodBoard rows={rows} />
+      <MethodBoard rows={rows} methods={methods} />
       {rows.length === 0 ? (
         <p className="text-sm text-muted">Belum ada peserta. Agent yang kalah BTC dan Sharpe negatif setelah 7 hari di-kill.</p>
       ) : (
@@ -497,7 +516,7 @@ function League({
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted">
               {filtered.length === rows.length
-                ? "25 agent teratas"
+                ? "40 agent teratas"
                 : `${Math.min(25, filtered.length)} dari ${filtered.length} agent ${posisiFilter === "hold" ? "yang hold" : "yang flat"}`}
             </p>
             <div className="flex gap-1">

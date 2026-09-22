@@ -159,6 +159,10 @@ export type Snapshot = {
   trades: Trade[];
   equity: Record<string, EquityPoint[]>;
   league: LeagueRow[];
+  /** Full roster size; `league` itself is only the top slice for the UI. */
+  leagueTotal?: number;
+  /** Pre-aggregated method board so the client need not ship every sample agent. */
+  methods?: MethodStats[];
   btcReturnPct: number;
   regime: "trend" | "chop";
   live?: {
@@ -192,6 +196,15 @@ export type LeagueRow = {
   soldPct: number;
   soldReady: boolean;
   positionCount: number;
+};
+
+export type MethodStats = {
+  strategy: string;
+  interval: string;
+  n: number;
+  median: number;
+  mean: number;
+  best: number;
 };
 
 export type CreateAgentInput = {

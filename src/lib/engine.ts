@@ -37,10 +37,13 @@ import type {
   Thought,
   Trade,
   LeagueRow,
+  MethodStats,
 } from "./types";
 
 export const MAX_TRADES = 20_000;
 const MAX_EQUITY = 400;
+const SNAPSHOT_CACHE_MS = 2_500;
+const LEAGUE_UI_LIMIT = 40;
 
 const SEED_AGENTS: AgentRuntime[] = [
   {
@@ -101,23 +104,34 @@ export class PaperEngine {
   private lastLeagueTs = 0;
   private persisting = false;
   private equityMark = new Map<string, number>();
+  private tradesByAgent = new Map<string, Trade[]>();
+  private sharpeCache = new Map<string, { len: number; value: number }>();
+  private snapshotCache: Snapshot | null = null;
+  private snapshotCacheAt = 0;
   protected thoughts = new Map<string, AgentThought>();
 
   snapshot(): Snapshot {
-    this.maybeBackfillScan();
-    const agents = this.agents.map((agent) => this.view(agent));
-    const btcReturnPct = this.btcReturnPct();
-    const league = this.leagueRows(agents, btcReturnPct);
+    const now = Date.now();
+    if (this.snapshotCache && now - this.snapshotCacheAt < SNAPSHOT_CACHE_MS) {
+      return this.snapshotCache;
+    }
+
+    const league = this.leagueRowsFast();
+    const methods = this.methodStatsFromLeague(league);
+    const topLeague = league.slice(0, LEAGUE_UI_LIMIT);
     const shown = new Set(league.slice(0, 12).map((row) => row.id));
-    const visible = agents
+    const visible = this.agents
       .filter((agent) => shown.has(agent.id))
-      .map((agent) => ({
-        ...agent,
-        thought: { ...agent.thought, notes: [], topBuys: [] },
-      }));
+      .map((agent) => {
+        const row = this.view(agent);
+        return {
+          ...row,
+          thought: { ...row.thought, notes: [], topBuys: [] },
+        };
+      });
     const equity: Record<string, EquityPoint[]> = {};
     for (const id of shown) equity[id] = (this.equity[id] ?? []).slice(-40);
-    return {
+    const snap: Snapshot = {
       mode: this.config?.mode ?? "paper",
       running: this.running,
       starting: this.starting,
@@ -130,16 +144,21 @@ export class PaperEngine {
       agents: visible,
       trades: this.trades.slice(-80).reverse(),
       equity,
-      btcReturnPct,
+      btcReturnPct: this.btcReturnPct(),
       regime: this.currentRegime(),
-      league,
+      league: topLeague,
+      leagueTotal: league.length,
+      methods,
     };
+    this.snapshotCache = snap;
+    this.snapshotCacheAt = now;
+    return snap;
   }
 
   agentDetail(id: string) {
     const agent = this.agents.find((row) => row.id === id);
     if (!agent) return null;
-    return this.agentDetailFrom(agent, this.trades.filter((trade) => trade.agentId === id));
+    return this.agentDetailFrom(agent, this.tradesFor(id));
   }
 
   async agentDetailFull(id: string) {
@@ -190,6 +209,7 @@ export class PaperEngine {
       this.startedAt ??= Date.now();
       this.running = true;
       this.persistTimer = setInterval(() => {
+        this.maybeBackfillScan();
         void this.persist();
         this.tickLeague();
         if (Date.now() - this.fees.fetchedAt > 60 * 60_000) {
@@ -318,6 +338,9 @@ export class PaperEngine {
   async removeAgent(id: string) {
     this.agents = this.agents.filter((agent) => agent.id !== id);
     this.trades = this.trades.filter((trade) => trade.agentId !== id);
+    this.tradesByAgent.delete(id);
+    this.sharpeCache.delete(id);
+    this.snapshotCache = null;
     delete this.equity[id];
     this.thoughts.delete(id);
     await this.deletePersistedAgent(id);
@@ -379,6 +402,7 @@ export class PaperEngine {
         this.agents = this.defaultAgents();
       }
       this.trades = saved.trades;
+      this.rebuildTradeIndex();
       this.equity = saved.equity;
       this.startedAt = saved.startedAt;
       this.rememberEquityMarks();
@@ -387,6 +411,7 @@ export class PaperEngine {
     }
     this.agents = this.defaultAgents();
     this.trades = [];
+    this.rebuildTradeIndex();
     this.equity = Object.fromEntries(this.agents.map((agent) => [agent.id, []]));
   }
 
@@ -655,7 +680,7 @@ export class PaperEngine {
           const takeProfitPct = Number(params.takeProfitPct ?? 0);
           if ((hardStopPct > 0 || takeProfitPct > 0) && close != null && !sells.some((row) => row.symbol === symbol)) {
             const lot = openLot(
-              this.trades.filter((trade) => trade.agentId === agent.id),
+              this.tradesFor(agent.id),
               symbol,
               holdingQty(agent, symbol),
             );
@@ -819,10 +844,7 @@ export class PaperEngine {
     if (!trade) return false;
     agent.lastSignal = side;
     agent.lastSymbol = symbol;
-    this.trades.push(trade);
-    if (this.trades.length > MAX_TRADES) {
-      this.trades.splice(0, this.trades.length - MAX_TRADES);
-    }
+    this.recordTrade(trade);
     void this.persistTrade(trade).catch((error) => {
       console.error("failed to persist trade", error);
     });
@@ -858,14 +880,14 @@ export class PaperEngine {
       netPnl,
       netPct,
       netTone,
-      tradeCount: this.trades.filter((t) => t.agentId === agent.id).length,
+      tradeCount: this.tradesFor(agent.id).length,
       lastSignal: agent.lastSignal,
       lastSymbol: agent.lastSymbol,
       lastError: agent.lastError,
       thought: this.publicThought(agent.id),
       status: agent.status ?? "active",
       bornAt: agent.bornAt,
-      sharpe: sharpeRatio(this.equity[agent.id] ?? [], periodsFrom(this.agentInterval(agent))),
+      sharpe: this.cachedSharpe(agent),
       vsBtc: (agent.startingUsdt === 0 ? 0 : (pnl / agent.startingUsdt) * 100) - this.btcReturnSince(agent),
       interval: this.agentInterval(agent),
     };
@@ -934,6 +956,92 @@ export class PaperEngine {
     return ref ? this.btcReturnSince(ref) : 0;
   }
 
+  private cashIfSoldHoldings(agent: AgentRuntime) {
+    let proceeds = 0;
+    let any = false;
+    for (const [asset, qty] of Object.entries(agent.holdings)) {
+      if (!(qty > 0)) continue;
+      any = true;
+      const symbol = toSymbol(asset);
+      const bid = this.quotes[symbol]?.bid ?? 0;
+      if (!(bid > 0)) return { ready: false, pnl: 0, pct: 0 };
+      proceeds += qty * bid * (1 - takerFee(this.fees, symbol) - PPH22_FOREIGN_SELL);
+    }
+    if (!any) {
+      const pnl = roundUsd(agent.usdt - agent.startingUsdt);
+      const pct = agent.startingUsdt === 0 ? 0 : (pnl / agent.startingUsdt) * 100;
+      return { ready: true, pnl, pct };
+    }
+    const end = roundUsd(agent.usdt + proceeds);
+    const pnl = roundUsd(end - agent.startingUsdt);
+    const pct = agent.startingUsdt === 0 ? 0 : (pnl / agent.startingUsdt) * 100;
+    return { ready: true, pnl, pct };
+  }
+
+  private leagueRowsFast(): LeagueRow[] {
+    const rows: LeagueRow[] = [];
+    for (const agent of this.agents) {
+      const equity = this.markEquity(agent);
+      const pnlPct = agent.startingUsdt === 0 ? 0 : ((equity - agent.startingUsdt) / agent.startingUsdt) * 100;
+      const sold = this.cashIfSoldHoldings(agent);
+      let positionCount = 0;
+      for (const qty of Object.values(agent.holdings)) {
+        if (qty > 0) positionCount += 1;
+      }
+      rows.push({
+        id: agent.id,
+        strategy: agent.strategy,
+        status: agent.status ?? "active",
+        equity,
+        pnlPct,
+        sharpe: this.cachedSharpe(agent),
+        vsBtc: pnlPct - this.btcReturnSince(agent),
+        allocPct: agent.allocPct,
+        rank: 0,
+        interval: this.agentInterval(agent),
+        soldPnl: sold.pnl,
+        soldPct: sold.pct,
+        soldReady: sold.ready,
+        positionCount,
+      });
+    }
+    rows.sort((a, b) => {
+      if (a.soldReady !== b.soldReady) return a.soldReady ? -1 : 1;
+      return b.soldPnl - a.soldPnl;
+    });
+    for (let i = 0; i < rows.length; i += 1) rows[i].rank = i + 1;
+    return rows;
+  }
+
+  private methodStatsFromLeague(rows: LeagueRow[]): MethodStats[] {
+    const groups = new Map<string, { strategy: string; interval: string; pnl: number[] }>();
+    for (const row of rows) {
+      if (!row.soldReady) continue;
+      const key = `${row.interval}|${row.strategy}`;
+      const group = groups.get(key) ?? { strategy: row.strategy, interval: row.interval, pnl: [] };
+      group.pnl.push(row.soldPnl);
+      groups.set(key, group);
+    }
+    return [...groups.values()]
+      .map((group) => {
+        const sorted = [...group.pnl].sort((a, b) => a - b);
+        const mid =
+          sorted.length % 2 === 1
+            ? sorted[(sorted.length - 1) / 2]
+            : ((sorted[sorted.length / 2 - 1] ?? 0) + (sorted[sorted.length / 2] ?? 0)) / 2;
+        const mean = group.pnl.reduce((sum, value) => sum + value, 0) / group.pnl.length;
+        return {
+          strategy: group.strategy,
+          interval: group.interval,
+          n: group.pnl.length,
+          median: mid,
+          mean,
+          best: sorted.at(-1) ?? 0,
+        };
+      })
+      .sort((a, b) => b.median - a.median);
+  }
+
   private cashIfSold(agent: AgentView) {
     let proceeds = 0;
     for (const pos of agent.positions) {
@@ -948,6 +1056,7 @@ export class PaperEngine {
     return { ready: true, pnl, pct };
   }
 
+  /** @deprecated kept for tickLeague paths that still use AgentView */
   private leagueRows(agents: AgentView[], _btcReturnPct: number): LeagueRow[] {
     return agents
       .map((agent) => {
@@ -1045,8 +1154,8 @@ export class PaperEngine {
     return sample + ms;
   }
 
-  protected positionsOf(agent: AgentRuntime, trades = this.trades): PositionView[] {
-    const agentTrades = trades.filter((trade) => trade.agentId === agent.id);
+  protected positionsOf(agent: AgentRuntime, trades?: Trade[]): PositionView[] {
+    const agentTrades = trades ?? this.tradesFor(agent.id);
     return Object.entries(agent.holdings)
       .filter(([, qty]) => qty > 0)
       .map(([asset, qty]) => {
@@ -1103,12 +1212,48 @@ export class PaperEngine {
     if (!force && now - this.lastEquityTs < 60_000) return;
     this.lastEquityTs = now;
     for (const agent of this.agents) {
-      const view = this.view(agent);
+      const equity = this.markEquity(agent);
       const series = this.equity[agent.id] ?? [];
-      series.push({ ts: now, equity: view.equity });
+      series.push({ ts: now, equity });
       if (series.length > MAX_EQUITY) series.splice(0, series.length - MAX_EQUITY);
       this.equity[agent.id] = series;
+      this.sharpeCache.delete(agent.id);
     }
+    this.snapshotCache = null;
+  }
+
+  protected recordTrade(trade: Trade) {
+    this.trades.push(trade);
+    const list = this.tradesByAgent.get(trade.agentId);
+    if (list) list.push(trade);
+    else this.tradesByAgent.set(trade.agentId, [trade]);
+    if (this.trades.length > MAX_TRADES) {
+      this.trades.splice(0, this.trades.length - MAX_TRADES);
+      this.rebuildTradeIndex();
+    }
+    this.snapshotCache = null;
+  }
+
+  protected tradesFor(agentId: string) {
+    return this.tradesByAgent.get(agentId) ?? [];
+  }
+
+  protected rebuildTradeIndex() {
+    this.tradesByAgent.clear();
+    for (const trade of this.trades) {
+      const list = this.tradesByAgent.get(trade.agentId);
+      if (list) list.push(trade);
+      else this.tradesByAgent.set(trade.agentId, [trade]);
+    }
+  }
+
+  private cachedSharpe(agent: AgentRuntime) {
+    const series = this.equity[agent.id] ?? [];
+    const hit = this.sharpeCache.get(agent.id);
+    if (hit && hit.len === series.length) return hit.value;
+    const value = sharpeRatio(series, periodsFrom(this.agentInterval(agent)));
+    this.sharpeCache.set(agent.id, { len: series.length, value });
+    return value;
   }
 
   protected persist() {

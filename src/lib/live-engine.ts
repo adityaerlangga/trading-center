@@ -1,4 +1,4 @@
-import { PaperEngine, getPaperEngine, materialPositions, MAX_TRADES } from "./engine";
+import { PaperEngine, getPaperEngine, materialPositions } from "./engine";
 import {
   LIVE_AGENT_SPECS,
   LIVE_ENSEMBLE_MS,
@@ -393,8 +393,7 @@ export class LiveEngine extends PaperEngine {
       agent.lastSignal = side;
       agent.lastSymbol = symbol;
       agent.lastError = undefined;
-      this.trades.push(trade);
-      if (this.trades.length > MAX_TRADES) this.trades.splice(0, this.trades.length - MAX_TRADES);
+      this.recordTrade(trade);
       void this.persistTrade(trade).catch((error) => {
         console.error("failed to persist live trade", error);
       });
