@@ -769,7 +769,7 @@ export class PaperEngine {
       const materialSells = sells.filter((sell) => {
         const qty = holdingQty(agent, sell.symbol);
         const value = this.markPrice(sell.symbol) * qty;
-        return value >= 1;
+        return value >= 5;
       });
       this.note(agent.id, {
         action: "scan",
@@ -1431,13 +1431,17 @@ function periodsFrom(interval?: string) {
   return 12 * 24 * 365;
 }
 
-/** Positions large enough to trade. Dust below $1 does not consume a slot. */
-export function materialPositions(agent: AgentRuntime, priceOf: (symbol: string) => number) {
+/** Positions large enough to trade. Dust below ~min notional does not consume a slot. */
+export function materialPositions(
+  agent: AgentRuntime,
+  priceOf: (symbol: string) => number,
+  minUsd = 5,
+) {
   let count = 0;
   for (const [asset, qty] of Object.entries(agent.holdings)) {
     if (!(qty > 0)) continue;
     const price = priceOf(toSymbol(asset));
-    if (price > 0 && price * qty >= 1) count += 1;
+    if (price > 0 && price * qty >= minUsd) count += 1;
   }
   return count;
 }
