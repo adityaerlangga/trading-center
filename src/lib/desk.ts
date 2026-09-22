@@ -31,8 +31,8 @@ export const LIVE_RISK_PARAMS: Record<string, number> = {
   maxPositions: 1,
   /** Deploy full cash on entry — do not shrink by ATR vol-target. */
   fullSleeve: 1,
-  hardStopPct: 0.02,
-  takeProfitPct: 0.025,
+  hardStopPct: 0.012,
+  takeProfitPct: 0.015,
   maxMom: 0.04,
   startDelay: 0,
 };

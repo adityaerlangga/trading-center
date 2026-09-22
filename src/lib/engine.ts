@@ -745,16 +745,19 @@ export class PaperEngine {
               holdingQty(agent, symbol),
             );
             if (lot.entryPrice > 0) {
-              const dd = (close - lot.entryPrice) / lot.entryPrice;
-              if (hardStopPct > 0 && dd <= -hardStopPct) {
+              // Nett vs cost basis (buy fee already in entryPrice): sell taker + PPh22 1%.
+              const sellDrag = takerFee(this.fees, symbol) + PPH22_FOREIGN_SELL;
+              const nettExit = close * (1 - sellDrag);
+              const nettPct = (nettExit - lot.entryPrice) / lot.entryPrice;
+              if (hardStopPct > 0 && nettPct <= -hardStopPct) {
                 sells.push({
                   symbol,
-                  reason: `${symbol}: hard stop ${(dd * 100).toFixed(2)}% ≤ -${(hardStopPct * 100).toFixed(1)}% dari entry ${lot.entryPrice.toFixed(6)}`,
+                  reason: `${symbol}: hard stop nett ${(nettPct * 100).toFixed(2)}% ≤ -${(hardStopPct * 100).toFixed(1)}% (setelah fee+PPh22)`,
                 });
-              } else if (takeProfitPct > 0 && dd >= takeProfitPct) {
+              } else if (takeProfitPct > 0 && nettPct >= takeProfitPct) {
                 sells.push({
                   symbol,
-                  reason: `${symbol}: take profit ${(dd * 100).toFixed(2)}% ≥ +${(takeProfitPct * 100).toFixed(1)}% dari entry ${lot.entryPrice.toFixed(6)}`,
+                  reason: `${symbol}: take profit nett ${(nettPct * 100).toFixed(2)}% ≥ +${(takeProfitPct * 100).toFixed(1)}% (setelah fee+PPh22)`,
                 });
               }
             }
