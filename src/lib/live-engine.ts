@@ -331,7 +331,7 @@ export class LiveEngine extends PaperEngine {
     await this.persistAgent(live);
     this.note(live.id, {
       action: "wait",
-      reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: full sleeve · TP +9% / SL -3% / no-chase.`,
+      reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: full sleeve · TP +2.5% / SL -2% / no-chase.`,
     });
     void this.persist();
   }
