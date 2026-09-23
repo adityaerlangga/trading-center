@@ -322,6 +322,7 @@ export class LiveEngine extends PaperEngine {
     }
 
     const strategy = getStrategy(winner.strategy);
+    const intervalChanged = live.interval !== winner.interval;
     live.strategy = strategy.name;
     live.interval = winner.interval;
     live.params = { ...strategy.defaults, ...winner.params, ...LIVE_RISK_PARAMS };
@@ -333,6 +334,13 @@ export class LiveEngine extends PaperEngine {
       action: "wait",
       reason: `Ensemble: live mengikuti ${winner.paperId} · ${winner.strategy} · ${winner.interval} · 24h ${winner.recentPct.toFixed(2)}%. Risk: full sleeve · TP nett +1.5% / SL nett -1.2% / no-chase.`,
     });
+    // Old WS subs stay on the previous interval — without a resync, candle closes
+    // never match the new agent interval and the desk goes mute for hours.
+    if (intervalChanged || !this.books[winner.interval]) {
+      void this.resyncMarketData().catch((error) => {
+        console.error("live interval resync failed", error);
+      });
+    }
     void this.persist();
   }
 
@@ -414,18 +422,20 @@ export class LiveEngine extends PaperEngine {
       if (side === "BUY") {
         const realFree = await fetchSpotUsdtFree();
         this.spotUsdt = realFree;
-        const want = agent.usdt * sizePct;
-        if (want > realFree + 1e-9) {
-          const capped = realFree / agent.usdt;
-          if (!(capped > 0) || realFree < 5) {
-            this.note(agent.id, {
-              action: "wait",
-              symbol,
-              reason: `Spot USDT real ${realFree.toFixed(2)} tidak cukup untuk sleeve agent (butuh ~${want.toFixed(2)}).`,
-            });
-            return false;
-          }
-          sizePct = Math.min(sizePct, capped);
+        // Mirror must track spot free; leave ~0.3% so quoteOrderQty + fee never trips -2010.
+        agent.usdt = realFree;
+        const spendable = realFree * 0.997;
+        if (!(spendable >= 5)) {
+          this.note(agent.id, {
+            action: "wait",
+            symbol,
+            reason: `Spot USDT real ${realFree.toFixed(2)} di bawah minimum entry.`,
+          });
+          return false;
+        }
+        const want = realFree * sizePct;
+        if (want > spendable + 1e-9) {
+          sizePct = spendable / realFree;
         }
       }
 

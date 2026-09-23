@@ -560,6 +560,31 @@ export class PaperEngine {
     this.feedClient.start();
   }
 
+  /**
+   * Re-subscribe WS + warm klines for the agent's current interval(s).
+   * Needed when live ensemble switches 5m↔15m without a full restart —
+   * otherwise closes keep arriving on the old interval and scans stall.
+   */
+  protected async resyncMarketData() {
+    if (!this.config || (!this.running && !this.starting)) return;
+    const intervals = this.activeIntervals();
+    this.connectFeed();
+    for (const interval of intervals) {
+      const symbols = this.symbolsForInterval(interval);
+      const existing = this.books[interval] ?? {};
+      const missing = symbols.filter((symbol) => (existing[symbol]?.length ?? 0) < 40);
+      if (missing.length === 0) continue;
+      const limit = interval === "1s" ? 180 : 120;
+      const batch = await fetchKlinesBatch(missing, interval, limit);
+      this.books[interval] = { ...existing, ...batch };
+    }
+    this.candles = this.books[this.config.interval] ?? {};
+    for (const agent of this.agents) {
+      if (agent.status === "killed") continue;
+      void this.scanOne(agent, this.universeFor(agent));
+    }
+  }
+
   private applyKline(interval: string, symbol: string, candle: Candle) {
     const book = (this.books[interval] ??= {});
     const series = book[symbol] ?? [];
